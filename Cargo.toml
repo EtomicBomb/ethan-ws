@@ -1,0 +1,20 @@
+[package]
+name = "back"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+axum = { version = "0.6.19", features = ["ws"] } 
+axum-server = { version = "0.5.1", features = ["tls-rustls"] }
+futures-util = "0.3"
+http = "0.2.9"
+hyper = { version = "0.14.27", features = ["full"] }
+rand = "0.8.5"
+serde = { version = "1.0.180", features = ["derive"] }
+serde_with = "3.1.0"
+tokio = { version = "1.29.1", features = ["full"] }
+tower = "0.4.13"
+tower-http = { version = "0.4.3", features = ["full"] }
+vec_map = "0.8.2"

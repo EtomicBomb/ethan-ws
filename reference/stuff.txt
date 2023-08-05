@@ -1,0 +1,82 @@
+# When you go to the website:
+    - create a new game
+    - choose action timer, and variants
+    - game link to share and copy
+    - start game button
+
+# lobby screen (when you click the link)
+    - maybe it looks like the table
+    - says waiting to start the game / waiting for other players to join
+    - message says whether game is started and the names of the players in their
+      spots around the table (randomly assigned)
+
+# When the game starts:
+    - your cards flip up and 
+
+# animations
+    - card popping and highlighting up on hover
+    - cards travelling from the hand to the table
+    - turn direction indicator
+    
+# tutorial video
+- Core gameplay
+    - You win if you're the first person to shed all the cards in your hand.
+    - You can put down cards on your turn, as long as your play is the same kind as
+      the play on the table and it's higher than the play on the table
+    - if at any time, you don't want to (or can't) put down cards, you can pass
+    - If you put down something, and everyone else skips, then you can put down
+      whatever you want on your turn
+- What are the valid kinds of plays
+    - Singles, pairs, and poker hands
+- What does it mean for a play to be higher 
+    - singles are higher if they have a higher number and a higher suit
+        - numbers (rank) are ranked 3, 4, 5, 6, 7, 8, 9, T, J, Q, K, A, 2 (note: 3 lowest and 2 highest)
+        - suits: club, spade, heart, diamond 
+    - pairs ranked on the highest card in the pair
+    - poker hand straights, flush, full house, four-of-a-kind (+trash), straight flush
+        - ranked by the highest card, except for full house (ranked by highest in
+          triple) and four-of-a-kind (ranked by highest in quad)
+
+# card design
+
+- should have card icon in top left and bottom right corners, with big in
+  the middle
+  
+# interface
+
+- chip for players who have passed
+- action chip / who's turn is it
+- card backs and card counts for all other players
+- player names
+- physically show other players cards
+- action timer (circle around a player's name?)
+- won chip / trophy 
+
+- your cards:
+    - which cards are selected
+    - group and ungroup cards?
+        - card group can be put on different rows
+        - button to 
+    - hint for cards that are playable / cycle through playable hands
+- play button (says pass when no cards are selected, and name of hand that's
+      available)
+
+- cards in the middle of the table
+    - should have the cards along with the name of the play?
+
+# api
+- When you visit the site, client requests a sharable game code
+- host user picks game settings and clicks the start button
+- when you visit the link, we establish a websocket connection
+- kinds of websocket messages
+    - from client: pass, play
+    - from client: request a seat
+    - from client: set username
+    - from client: 
+
+    - from server: game start at specific time
+    - from server: this player joined at this seat
+    - from server: these are your cards
+    - from server: player played this hand at this time
+    - from server: default play because time out
+    - 

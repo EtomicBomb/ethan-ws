@@ -1,9 +1,9 @@
-use super::plays::Play;
-use super::plays::all_plays;
-use crate::cards::{Card, Cards};
+use super::{Play, all_plays, Card, Cards};
 use rand::{thread_rng, Rng};
 use std::iter::once;
-use rand::SliceRandom;
+use rand::seq::SliceRandom;
+use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct GameState {
@@ -16,16 +16,16 @@ pub struct GameState {
 
 impl Default for GameState {
     fn default() -> GameState {
-        let mut deck = Vec::new(Cards::ENTIRE_DECK);
+        let mut deck = Vec::from_iter(Cards::ENTIRE_DECK);
         deck.shuffle(&mut thread_rng());
 
-        let hands = deck.chunks(13)
-            .zip(Seat::ALL)
-            .map(|(seat, hand)| (seat, Cards::from_iter(hand.iter().cloned()))
+        let hands: HashMap<_, _> = Seat::ALL.into_iter()
+            .zip(deck.chunks(13))
+            .map(|(seat, hand)| (seat, Cards::from_iter(hand.iter().cloned())))
             .collect();
 
-        let (current_player, _) = hands.iter()
-            .find(|(seat, hand)| hand.contains(Card::THREE_OF_CLUBS))
+        let (&current_player, _) = hands.iter()
+            .find(|(_, hand)| hand.contains(Card::THREE_OF_CLUBS))
             .unwrap();
 
         GameState {
@@ -84,7 +84,9 @@ impl GameState {
         // assumes that play is_legal
         self.can_play(play)?;
 
-        self.hands[&self.current_player].remove_all(play.cards());
+        self.hands
+            .get_mut(&self.current_player).unwrap()
+            .remove_all(play.cards());
 
         if self.hands[&self.current_player].is_empty() {
             self.winning_player = Some(self.current_player);
@@ -113,7 +115,7 @@ impl GameState {
     }
 
     pub fn hand(&self, seat: Seat) -> Cards {
-        self.hands[&self.current_player]
+        self.hands[&seat]
     }
 
     pub fn my_hand(&self) -> Cards {
@@ -137,7 +139,7 @@ pub enum GameError {
     PlayDoesntExist,
 }
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub enum Seat {
     North,
     East,

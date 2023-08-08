@@ -1,5 +1,4 @@
 use vec_map::{VecMap};
-use lazy_static::lazy_static;
 
 use std::f64::INFINITY;
 use std::io::{self, BufReader};
@@ -10,9 +9,8 @@ use std::collections::HashMap;
 use rand::{thread_rng, Rng};
 use rand::seq::SliceRandom;
 
-use super::cards::{Card, Cards};
-use super::state::GameState;
-use super::play::{Play, PlayKind};
+use super::{Play, PlayKind, Card, GameState, Cards, all_plays, GameError};
+
 
 pub fn choose_play(game: &GameState) -> Play {
     let game = SafeGameInterface { game };
@@ -44,7 +42,7 @@ struct SafeGameInterface<'a> {
     game: &'a GameState,
 }
 
-impl SafeGameInterface {
+impl<'a> SafeGameInterface<'a> {
     fn my_hand(&self) -> Cards {
         self.game.my_hand()
     }
@@ -57,7 +55,7 @@ impl SafeGameInterface {
         self.game.valid_plays()
     }
     
-    fn can_play(&self, play: &Play) -> Result<(), GameError> {
+    fn can_play(&self, play: Play) -> Result<(), GameError> {
         self.game.can_play(play)
     }
 }
@@ -237,11 +235,11 @@ impl CardsUsedSoFar {
     }
 
     fn get_digest(&self) -> usize {
-        self.seen_so_far as usize // result always in [0,2^13)
+        self.seen_so_far as usize
     }
 }
 
-fn get_expected_pass_count(play1: Play, play2: Play) -> f64 {
+fn get_expected_pass_count(_play1: Play, _play2: Play) -> f64 {
     3.0
 }
 

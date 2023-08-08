@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-
-use super::cards::{Card, Cards};
+use super::{Card, Cards};
 use std::fmt;
+use std::mem;
 
 #[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
 pub enum PlayKind {
@@ -17,7 +17,7 @@ pub enum PlayKind {
 }
 
 impl fmt::Display for PlayKind {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match *self {
             PlayKind::Pass => "pass",
             PlayKind::Single => "single",
@@ -55,70 +55,62 @@ pub struct Play {
 }
 
 impl Play {
-    fn pass() -> Play {
-        Play {
-            cards: Cards::empty(),
+    pub fn pass() -> Self {
+        Self {
+            cards: Cards::default(),
             kind: PlayKind::Pass,
             ranking_card: None,
         }
     }
 
-    fn single(card: Card) -> Play {
-        Play {
-            cards: Cards::single(card),
-            kind: PlayKind::Single,
-            ranking_card: Some(card),
-        }
-    }
-
-    fn pair(cards: Cards) -> Play {
-        Play {
+    fn pair(cards: Cards) -> Self {
+        Self {
             cards,
             kind: PlayKind::Pair,
             ranking_card: cards.max_card(),
         }
     }
 
-    fn straight(cards: Cards) -> Play {
-        Play {
+    fn straight(cards: Cards) -> Self {
+        Self {
             cards,
             kind: PlayKind::Straight,
             ranking_card: cards.max_card(),
         }
     }
 
-    fn flush(cards: Cards) -> Play {
-        Play {
+    fn flush(cards: Cards) -> Self {
+        Self {
             cards,
             kind: PlayKind::Flush,
             ranking_card: cards.max_card(),
         }
     }
 
-    fn full_house(three_of_a_kind: Cards, pair: Cards) -> Play {
+    fn full_house(three_of_a_kind: Cards, pair: Cards) -> Self {
         let mut cards = three_of_a_kind;
         cards.insert_all(pair);
 
-        Play {
+        Self {
             cards,
             kind: PlayKind::FullHouse,
             ranking_card: three_of_a_kind.max_card(),
         }
     }
 
-    fn four_of_a_kind(four_of_a_kind: Cards, trash_card: Card) -> Play {
+    fn four_of_a_kind(four_of_a_kind: Cards, trash_card: Card) -> Self {
         let mut cards = four_of_a_kind;
         cards.insert(trash_card);
 
-        Play {
+        Self {
             cards,
             kind: PlayKind::FourOfAKind,
             ranking_card: four_of_a_kind.max_card(),
         }
     }
 
-    fn straight_flush(straight: Play) -> Play {
-        Play {
+    fn straight_flush(straight: Self) -> Self {
+        Self {
             cards: straight.cards,
             kind: PlayKind::StraightFlush,
             ranking_card: straight.ranking_card,
@@ -130,12 +122,12 @@ impl Play {
     }
 
     #[inline]
-    pub fn len_eq(self, other: Play) -> bool {
+    pub fn len_eq(self, other: Self) -> bool {
         self.kind.len() == other.kind.len()
     }
 
     #[inline]
-    pub fn can_play_on(self, other: Play) -> bool {
+    pub fn can_play_on(self, other: Self) -> bool {
         if self.is_pass() { return true }
 
         if self.kind.len() != other.kind.len() {
@@ -173,7 +165,7 @@ pub struct AllPlays {
 }
 
 impl AllPlays {
-    pub fn new(cards: Cards) -> AllPlays {
+    pub fn new(cards: Cards) -> Self {
         let mut rank_blocks = RankBlocks::new(cards);
 
         AllPlays {
@@ -195,11 +187,11 @@ pub fn all_plays(cards: Cards) -> Vec<Play> {
     let mut rank_blocks = RankBlocks::new(cards);
 
     // five card hands
-    plays.append(&mut rank_blocks.strait_flushes());
+    plays.append(&mut rank_blocks.straight_flushes());
     plays.append(&mut rank_blocks.four_of_a_kinds());
     plays.append(&mut rank_blocks.full_houses());
     plays.append(&mut flushes(cards));
-    plays.append(&mut rank_blocks.straits);
+    plays.append(&mut rank_blocks.straights);
 
     // pairs
     plays.append(&mut rank_blocks.pairs());
@@ -305,6 +297,11 @@ impl RankBlocks {
     }
 }
 
+fn singles(cards: Cards) -> Vec<Play> {
+    cards.into_iter()
+        .map(|card| Play { kind: PlayKind::Single, cards, ranking_card: Some(card) })
+        .collect() 
+}
 
 fn flushes(cards: Cards) -> Vec<Play> {
     // collect all of the cards

@@ -14,27 +14,29 @@ use super::{Play, PlayKind, Card, GameState, Cards, all_plays, GameError};
 
 pub fn choose_play(game: &GameState) -> Play {
     let game = SafeGameInterface { game };
-    let my_hand = game.my_hand();
 
-    let potential_inserts = PotentialInserts::new(my_hand);
-    let depth_left = my_hand.len();
+    *game.valid_plays().choose(&mut thread_rng()).unwrap()
 
-    let mut memo = VecMap::with_capacity(MEMO_TABLE_CAPACITIES[depth_left-1]);
-    let cards_used_so_far = CardsUsedSoFar::new();
-
-    // these include some invalid plays
-    let all_plays_no_pass = all_plays(my_hand).into_iter()
-        .filter(|p| !p.is_pass())
-        .collect();
-
-    let result = cost_of_tail(all_plays_no_pass, depth_left, &potential_inserts, game, cards_used_so_far, &mut memo);
-
-    let desired_play = result.first_play();
-
-    match game.can_play(desired_play) {
-        Ok(_) => desired_play,
-        Err(_) => game.valid_plays()[0],
-    }
+//    let my_hand = game.my_hand();
+//    let potential_inserts = PotentialInserts::new(my_hand);
+//    let depth_left = my_hand.len();
+//
+//    let mut memo = VecMap::with_capacity(MEMO_TABLE_CAPACITIES[depth_left-1]);
+//    let cards_used_so_far = CardsUsedSoFar::new();
+//
+//    // these include some invalid plays
+//    let all_plays_no_pass = all_plays(my_hand).into_iter()
+//        .filter(|p| !p.is_pass())
+//        .collect();
+//
+//    let result = cost_of_tail(all_plays_no_pass, depth_left, &potential_inserts, game, cards_used_so_far, &mut memo);
+//
+//    let desired_play = result.first_play();
+//
+//    match game.can_play(desired_play) {
+//        Ok(_) => desired_play,
+//        Err(_) => game.valid_plays()[0],
+//    }
 }
 
 #[derive(Copy, Clone)]

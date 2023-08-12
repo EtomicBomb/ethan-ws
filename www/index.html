@@ -11,15 +11,72 @@
 <head>
 
 <body>
-
-
-<input type="button" id="fullscreen" value="Fullscreen"></input>
-
-<h1>Pusoy</h1>
-
 <main>
 
+<div id="host">
+<a href="" id="game-link"></a>
+<input type="button" id="copy-game-link" value="🔗" />
+<input type="range" min="5000" max="120000" value="30000" id="set-action-timer">
+<p id="action-timer-value"></p>
+<input type="button" id="start-game-button" value="start game" />
+</div>
 
+<div>
+<input type="text" id="play-cards" placeholder="cards, comma delimited"/>
+<input type="button" id="play-cards-button" value="play cards" />
+</div>
+
+<div id="table">
+<div class="cards"></div>
+</div>
+
+<div id="my" class="player">
+<p class="username" contenteditable></p>
+<div class="cards"></div>
+<p class="load"></p>
+<div class="action-timer"><div class="progress"></div></div>
+<div class="avatar"></div>
+<div class="turn"></div>
+<div class="passed"></div>
+<div class="control"></div>
+<div class="win"></div>
+</div>
+
+<div id="left" class="player">
+<p class="username"></p>
+<div class="cards"></div>
+<p class="load"></p>
+<div class="action-timer"><div class="progress"></div></div>
+<div class="avatar"></div>
+<div class="turn"></div>
+<div class="passed"></div>
+<div class="control"></div>
+<div class="win"></div>
+</div>
+
+<div id="across" class="player">
+<p class="username"></p>
+<div class="cards"></div>
+<p class="load"></p>
+<div class="action-timer"><div class="progress"></div></div>
+<div class="avatar"></div>
+<div class="turn"></div>
+<div class="passed"></div>
+<div class="control"></div>
+<div class="win"></div>
+</div>
+
+<div id="right" class="player">
+<p class="username">
+<div class="cards"></div>
+<p class="load"></p>
+<div class="action-timer"><div class="progress"></div></div>
+<div class="avatar"></div>
+<div class="turn"></div>
+<div class="passed"></div>
+<div class="control"></div>
+<div class="win"></div>
+</div>
 
 </main>
 </body>

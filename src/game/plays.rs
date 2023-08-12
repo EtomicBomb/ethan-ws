@@ -4,6 +4,7 @@ use std::fmt;
 use std::mem;
 
 #[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PlayKind {
     Pass,
     Single,
@@ -299,7 +300,11 @@ impl RankBlocks {
 
 fn singles(cards: Cards) -> Vec<Play> {
     cards.into_iter()
-        .map(|card| Play { kind: PlayKind::Single, cards, ranking_card: Some(card) })
+        .map(|card| Play { 
+            kind: PlayKind::Single, 
+            cards: Cards::single(card), 
+            ranking_card: Some(card) 
+        })
         .collect() 
 }
 

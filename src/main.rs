@@ -53,17 +53,25 @@ use axum::response::sse::{self, KeepAlive, Sse};
 use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
 use futures_util::stream::{self, Stream};
 use std::convert::Infallible;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{self, UnboundedSender};
 use axum_extra::extract::cookie::CookieJar;
 use tokio::time::sleep;
 use std::sync::{Weak};
+use axum::debug_handler;
+use uuid::Uuid;
+use tokio::sync::MutexGuard;
+use tokio::time::sleep_until;
+use axum::extract::Query;
+use futures_util::future::BoxFuture;
+use http::HeaderMap;
+
 
 mod game;
-use crate::game::{GameState, choose_play, all_plays, Seat};
+use crate::game::{GameState, choose_play, all_plays, Seat, Cards, Play};
 
 #[tokio::main]
 async fn main() {
-//    let config = RustlsConfig::from_pem_file(
+//    let config = RustlsConfig::from_pem_file( // TODO: revert on deploy
 //        "secret/cert.pem",
 //        "secret/key.pem",
 //    )
@@ -75,28 +83,24 @@ async fn main() {
 
     let app = app();
 
-//    axum_server::bind_rustls(addr, config)
+//    axum_server::bind_rustls(addr, config) // TODO: revert on deploy
     axum_server::bind(addr)
         .serve(app.into_make_service())
         .await
         .unwrap();
 }
 
-// ideas for refactoring:
-// tokens (session_id, game_id) created by the client
-// no separate endpoints for creating and joining, just a single "subscribe" endpoint
-
 fn app() -> Router {
+    let serve_dir = ServeDir::new("www")
+        .not_found_service(ServeFile::new("www/not_found.html"))
+        .append_index_html_on_directories(true);
+
     Router::new()
         .nest("/api", api())
-        .nest_service("/", ServeDir::new("www").not_found_service(ServeFile::new("www/not_found.html")))
-        .layer(SetResponseHeaderLayer::overriding(
+        .nest_service("/", serve_dir)
+        .layer(SetResponseHeaderLayer::overriding( // TODO: revert debug
             header::CACHE_CONTROL, 
             HeaderValue::from_static("no-store, must-revalidate")
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
-            header::EXPIRES, 
-            HeaderValue::from_static("0")
         ))
 }
 
@@ -104,240 +108,579 @@ fn api() -> Router {
     let state: Arc<Mutex<ApiState>> = Default::default();
 
     Router::new()
-        .route("/games", post(create_game))
-        .route("/lobby/:game_id", post(join_lobby))
+        .route("/join", post(join))
         .route("/subscribe", get(subscribe))
-        .route("/username", put(set_username))
-        .route("/action-timer", post(start))
+        .route("/username", put(username))
+        .route("/action-timer", put(action_timer))
+        .route("/start-game", post(start_game))
         .route("/play", post(play))
-        .route("/can-play", post(can_play))
+        .route("/test", get(|| async { "test endpoint" }))
         .with_state(state)
 }
 
-
-async fn create_game(
-    jar: CookieJar,
-    State(api_state): State<Arc<Mutex<ApiState>>>,
-) -> impl IntoResponse {
-    let session_id = SessionId(thread_rng().gen());
-    let cookie = Cookie::build("session-id", session_id.to_string())
-        .secure(true)
-        .same_site(SameSite::Strict)
-        .permanent()
-        .finish();
-    let jar = jar.add(cookie);
-    
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let rx = UnboundedReceiverStream::new(rx);
-
-    let mut lobby = lobby.lock().await;
-    lobby.join(tx).await?;
-    let sse = Sse::new(rx).keep_alive(KeepAlive::default());
-
-    let game_id = GameId(thread_rng().gen());
-    let lobby = Arc::new(Mutex::new(Lobby::new(tx)));
-    api_state.lock().await.lobbies.insert(game_id, lobby);
-    api_state.lock().await.sessions.insert(session_id, Session {
-        game_id,  
-    });
-
-
-    Ok((jar, sse))
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JoinResponse {
+    user_id: UserId, 
 }
 
-use axum::debug_handler;
+#[debug_handler(state=Arc<Mutex<ApiState>>)]
+async fn join(
+    ExtractGameNoSeat { game }: ExtractGameNoSeat,
+) -> Result<impl IntoResponse, ()> {
+    let mut game = game.lock().await;
+    let user_id = game.join().await?;
+    // TODO: I want to use Authorization header authentication
+    // that would mean setting headers here!
+    Ok(Json(JoinResponse { user_id }))
+}
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn join_lobby(
-    jar: CookieJar,
-    ExtractLobby { lobby }: ExtractLobby,
-) -> Result<impl IntoResponse, ()> {
-    let id = SessionId(thread_rng().gen());
-    let cookie = Cookie::build("session-id", id.to_string())
-        .secure(true)
-        .same_site(SameSite::Strict)
-        .permanent()
-        .finish();
-    let jar = jar.add(cookie);
-    
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+async fn subscribe(
+    ExtractGame { game, seat, user_id }: ExtractGame,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+
+    dbg!(user_id, seat, &headers);
+
+    let game2 = Arc::clone(&game);
+    let mut game = game.lock().await;
+    let (tx, rx) = mpsc::unbounded_channel();
+    let tx2 = tx.clone();
     let rx = UnboundedReceiverStream::new(rx);
     let sse = Sse::new(rx).keep_alive(KeepAlive::default());
+    game.subscribe(seat, tx).await;
 
-    let mut lobby = lobby.lock().await;
-    lobby.new(tx).await?;
+    task::spawn(async move {
+        tx2.closed().await;
+        let mut game2 = game2.lock().await;
+        game2.disconnect(user_id).await;
+    });
 
-    Ok((jar, sse))
+    sse
 }
 
 #[derive(Deserialize)]
 struct UsernameRequest {
-    new_username: String,
+    username: String,
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn set_username(
-    ExtractLobbySeat { seat, lobby }: ExtractLobbySeat,
-    Json(UsernameRequest { new_username }): Json<UsernameRequest>,
-) {
-    let mut lobby = lobby.lock().await;
-    lobby.set_username(seat, new_username).await
+async fn username(
+    ExtractGame { game, seat, .. }: ExtractGame,
+    Json(UsernameRequest { username }): Json<UsernameRequest>,
+) -> impl IntoResponse {
+    let mut game = game.lock().await;
+    game.username(seat, username).await;
+    StatusCode::OK
 }
 
-
-async fn start() -> &'static str {
-    "create game"
+#[derive(Deserialize)]
+struct ActionTimerRequest {
+    millis: Option<DurationMillis>,
 }
 
-async fn play() -> &'static str {
-    "create game"
+#[debug_handler(state=Arc<Mutex<ApiState>>)]
+async fn action_timer(
+    ExtractGame { game, seat, .. }: ExtractGame,
+    Json(ActionTimerRequest { millis }): Json<ActionTimerRequest>,
+) -> impl IntoResponse {
+    let mut game = game.lock().await;
+    game.action_timer(seat, millis).await
 }
 
-async fn can_play() -> &'static str {
-    "can play"
+async fn start_game(
+    ExtractGame { game, seat, .. }: ExtractGame,
+) -> Result<impl IntoResponse, ()> {
+    let mut game = game.lock().await;
+    game.start_game(seat).await
 }
+
+#[derive(Deserialize)]
+struct PlayRequest {
+    play: Play,
+}
+
+async fn play(
+    ExtractGame { game, seat, .. }: ExtractGame,
+    Json(PlayRequest { play }): Json<PlayRequest>,
+) -> Result<impl IntoResponse, ()> {
+    let mut game = game.lock().await;
+    game.human_play(seat, play).await
+}
+
 
 #[derive(Default)]
 struct ApiState {
-    lobbies: HashMap<GameId, Arc<Mutex<Lobby>>>,
-    actives: HashMap<GameId, Arc<Mutex<Active>>>,
-    sessions: HashMap<SessionId, Session>,
+    games: HashMap<GameId, Arc<Mutex<Game>>>,
 }
 
-struct Session {
-    game_id: GameId,
-    seat: Seat,
+impl ApiState {
+    fn get_game(&mut self, game_id: GameId) -> Arc<Mutex<Game>> {
+        // TODO: timeout and delete game if nobody subscribes?
+        let game = self.games.entry(game_id)
+            .or_insert_with(|| Arc::new_cyclic(|weak| {
+                Mutex::new(Game::new(Weak::clone(weak)))
+            }));
+        Arc::clone(game)
+    }
+}
+
+struct Game {
+    users: HashMap<UserId, Seat>,
+    era: Era,
+    txs: HashMap<Seat, UserTx>,
+    host: Option<Seat>,
+    action_timer: Option<Duration>,
+    usernames: HashMap<Seat, String>,
+    this: Weak<Mutex<Game>>,
+}
+
+impl Game {
+    fn new(this: Weak<Mutex<Self>>) -> Self {
+        let mut seats_left = Vec::from(Seat::ALL);
+        seats_left.shuffle(&mut thread_rng());
+        let usernames = Seat::ALL.into_iter()
+            .map(|seat| (seat, format!("{:?}", seat)))
+            .collect();
+        Self {
+            users: HashMap::default(),
+            era: Era::Lobby { seats_left },
+            txs: HashMap::default(),
+            host: None,
+            action_timer: None,
+            usernames,
+            this,
+        }
+    }
+
+    fn get_seat(&self, user_id: UserId) -> Option<Seat> {
+        self.users.get(&user_id).cloned()
+    }
+
+    async fn join(&mut self) -> Result<UserId, ()> {
+        let Era::Lobby { ref mut seats_left } = self.era else { return Err(()) };
+        let Some(seat) = seats_left.pop() else { return Err(()) };
+        let user_id = thread_rng().gen();
+        let user_id = uuid::Builder::from_random_bytes(user_id).into_uuid();
+        let user_id = UserId(user_id);
+        self.users.insert(user_id, seat);
+        let is_host = seats_left.len() == 3;
+        if is_host { 
+            self.host = Some(seat);
+        }
+        // TODO: ensure that user has subscribed within a couple seconds
+        let humans: Vec<_> = self.users.values().cloned().collect();
+        for &other in humans.iter() {
+            let _ = self.respond(other, &Respond::Connected { seat }).await;
+        }
+        Ok(user_id)
+    }
+
+    async fn subscribe(&mut self, seat: Seat, tx: UserTx) {
+        self.txs.insert(seat, tx);
+        let _ = self.respond(seat, &Respond::Welcome { seat }).await;
+        let humans: Vec<_> = self.users.values().cloned().collect();
+        for &other in humans.iter() {
+            let _ = self.respond(seat, &Respond::Connected { seat: other }).await;
+        }
+        for other in Seat::ALL {
+            let username = self.usernames[&other].clone();
+            let _ = self.respond(seat, &Respond::Username { seat: other, username }).await;
+        }
+
+        // TODO: complete new subscription package with era details
+    }
+
+    async fn username(&mut self, seat: Seat, username: String) {
+        self.usernames.insert(seat, username.clone());
+        for other in Seat::ALL {
+            if seat == other { continue }
+            let username = username.clone();
+            let _ = self.respond(other, &Respond::Username { seat, username }).await;
+        }
+    }
+
+    async fn action_timer(&mut self, seat: Seat, millis: Option<DurationMillis>) -> Result<(), ()> {
+        if self.host != Some(seat) { return Err(()) }
+        self.action_timer = millis.map(Duration::from);
+        Ok(())
+    }
+
+    async fn start_game(&mut self, seat: Seat) -> Result<(), ()> {
+        // TODO: probably don't want to start a game when there already is one active
+        if self.host != Some(seat) { return Err(()) }
+        
+        self.era = Era::Active { 
+            game_state: GameState::default(), 
+            deadline: None
+        };
+
+        let Era::Active { game_state, .. } = &mut self.era else { unreachable!() };
+        let hands = Seat::ALL.map(|other| (other, game_state.hand(other)));
+        for (other, cards) in hands {
+            let _ = self.respond(other, &Respond::Deal { cards }).await;
+        }
+
+        let _ = self.solicit().await;
+        Ok(())
+    }
+
+    async fn auto_play(&mut self) -> Result<(), ()> {
+        let Era::Active { game_state, .. } = &mut self.era else { return Err(()) };
+        let current_player = game_state.current_player();
+        let play = choose_play(game_state);
+        self.play(current_player, play).await
+    }
+
+    async fn human_play(&mut self, seat: Seat, play: Play) -> Result<(), ()> {
+        let Era::Active { game_state, .. } = &mut self.era else { return Err(()) };
+        let current_player = game_state.current_player();
+        if seat != current_player { return Err(()) }
+        self.play(seat, play).await
+    }
+
+    async fn play(&mut self, seat: Seat, play: Play) -> Result<(), ()> {
+        let Era::Active { game_state, .. } = &mut self.era else { return Err(()) };
+
+        game_state.play(play).map_err(|_| ())?;
+
+        let load = game_state.hand(seat).len();
+
+        for other in Seat::ALL {
+            let _ = self.respond(other, &Respond::Play { seat, load, play }).await;
+        }
+
+        let win = load == 0;
+        if win {
+            self.era = Era::Win { };
+        } else {
+            let _ = self.solicit().await;
+        }
+
+        Ok(())
+    }
+
+    async fn disconnect(&mut self, user_id: UserId) {
+        let Some(seat) = self.users.remove(&user_id) else { return };
+        self.txs.remove(&seat);
+        let humans: Vec<_> = self.users.values().cloned().collect();
+        for &other in humans.iter() {
+            let _ = self.respond(other, &Respond::Disconnected { seat }).await;
+        }
+        // TODO: what if current player whose turn it is disconnects
+        // TODO: handle host disconnect
+        // TODO: special case all players disconnect
+    }
+
+    async fn solicit(&mut self) -> Result<(), ()> {
+        let bot_timer = Duration::from_millis(1000);
+        
+        let Era::Active { game_state, deadline: old_deadline } = &mut self.era else { return Err(()) };
+        let current_player = game_state.current_player();
+        let timer = match self.txs.get(&current_player) {
+            Some(_) => self.action_timer,
+            None => Some(bot_timer),
+        };
+        let deadline = timer.map(|timer| Instant::now() + timer);
+        *old_deadline = deadline;
+
+        let options = game_state.valid_plays();
+        let control = game_state.has_control();
+        let _ = self.respond(current_player, &Respond::Prompt { 
+            options, 
+            control,
+            timer: timer.map(DurationMillis::from), 
+        }).await;
+
+        for other in Seat::ALL {
+            if current_player == other { continue }
+            let _ = self.respond(other, &Respond::Turn { 
+                seat: current_player, 
+                control,
+                timer: timer.map(DurationMillis::from), 
+            }).await;
+        }
+
+        let this = Weak::clone(&self.this);
+        task::spawn(async move {
+            let _ = Self::force_play(this).await;
+        });
+        Ok(())
+    }
+
+    // BoxFuture to break recursion
+    fn force_play(this: Weak<Mutex<Self>>) -> BoxFuture<'static, Result<(), ()>> {
+        Box::pin(async move {
+            {
+                let Some(this) = this.upgrade() else { return Err(()) };
+                let this = this.lock().await;
+                let Era::Active { deadline: Some(deadline), .. } = this.era else { return Err(()) };
+                sleep_until(deadline).await;
+            }
+
+            let Some(this) = this.upgrade() else { return Err(()) };
+            let mut this = this.lock().await;
+            let Era::Active { deadline: Some(deadline), .. } = this.era else { return Err(()) };
+            if Instant::now() < deadline { return Err(()) }
+
+            // TODO: can choose a worse bot here if we're forcing a human player
+            let _ = this.auto_play().await;
+            Ok(())
+        })
+    }
+
+    async fn respond(&mut self, seat: Seat, response: &Respond) -> Result<(), ()> {
+        let response = serde_json::to_value(response).unwrap();
+        let response = sse::Event::default()
+            .json_data(&response["data"]).unwrap()
+            .event(response["event"].as_str().unwrap());
+//            .retry(Duration::from_millis(1000));
+        let response = Ok::<_, Infallible>(response);
+        let tx = self.txs.get(&seat).ok_or(())?;
+        tx.send(response).map_err(|_| ())?;
+        Ok(())
+    }
+}
+
+
+enum Era {
+    Lobby {
+        seats_left: Vec<Seat>,
+    },
+    Active {
+        game_state: GameState,
+        deadline: Option<Instant>,
+    },
+    Win { },
 }
 
 type UserTx = UnboundedSender<Result<sse::Event, Infallible>>;
 
-struct Lobby {
-    sinks: HashMap<Seat, UserTx>,
-    host: Seat,
-    seats_left: Vec<Seat>,
-    action_timer: Option<Duration>,
-    usernames: HashMap<Seat, String>,
-}
-
-impl Lobby {
-    async fn new(session_id: SessionId, host_tx: UserTx) -> Self {
-        let mut seats_left = Vec::from(Seat::ALL);
-        seats_left.shuffle(&mut thread_rng());
-        let host_seat = seats_left.pop().unwrap();
-        let sinks = HashMap::default();
-        let action_timer = None;
-        let usernames = HashMap::default();
-        let mut ret = Self { sinks, host: host_seat, seats_left, action_timer, usernames };
-        ret.join_announce(host_seat, host_tx).await; 
-        ret
-    }
-
-    async fn join(
-        &mut self, 
-        tx: UserTx,
-    ) -> Result<(), ()> {
-        let Some(seat) = self.seats_left.pop() else { return Err(()) };
-        self.join_announce(seat, tx).await;
-        Ok(())
-    }
-
-    async fn join_announce(&mut self, seat: Seat, tx: UserTx) {
-        self.sinks.insert(seat, tx);
-
-        todo!("announce")
-
-    }
-    
-    async fn set_username(&mut self, seat: Seat, new_username: String) {
-        self.usernames.insert(seat, new_username);
-        todo!("announce")
-    }
-}
-
-struct Active {
-    sinks: HashMap<Seat, UserTx>,
-    action_timer: Option<Duration>,
-    start_timestamp: Instant,
-    last_play: Instant,
-    game_state: GameState,
-}
-
-struct ExtractLobby {
-    lobby: Arc<Mutex<Lobby>>,
+struct ExtractGameNoSeat {
+    game: Arc<Mutex<Game>>,
 }
 
 #[async_trait]
-impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractLobby {
+impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractGameNoSeat {
     type Rejection = StatusCode;
     async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
-        let game_id = parts.extract::<Path<GameId>>().await.map_err(|_| StatusCode::IM_A_TEAPOT)?;
-        let state = state.lock().await;
-        let lobby = state.lobbies.get(&game_id).ok_or(StatusCode::IM_A_TEAPOT)?;
+        #[derive(Deserialize)]
+        struct AuthGameId {
+            game_id: GameId,
+        }
 
-        Ok(Self { lobby: Arc::clone(lobby) })
+        let Query(AuthGameId { game_id }) = parts.extract::<Query<AuthGameId>>().await
+            .map_err(|_| StatusCode::FORBIDDEN)?;
+        let game = state.lock().await.get_game(game_id);
+        Ok(Self { game })
     }
 }
 
-struct ExtractLobbySeat {
+struct ExtractGame {
+    game: Arc<Mutex<Game>>,
     seat: Seat,
-    lobby: Arc<Mutex<Lobby>>,
+    user_id: UserId,
 }
 
 #[async_trait]
-impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractLobbySeat {
-    type Rejection = StatusCode;
+impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractGame {
+    type Rejection = (StatusCode, &'static str);
     async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
-        let jar = parts.extract::<CookieJar>().await.expect("infallible");
-        let session_id = jar.get("session-id").ok_or(StatusCode::IM_A_TEAPOT)?;
-        let session_id: SessionId = session_id.value().parse().map_err(|_| StatusCode::IM_A_TEAPOT)?;
+        let Query(Authentication { game_id, user_id }) = parts.extract::<Query<Authentication>>().await
+            .map_err(|_| (StatusCode::FORBIDDEN, "expected user and game id: {}"))?;
+        let game = state.lock().await.get_game(game_id);
+        let seat = game.lock().await.get_seat(user_id)
+            .ok_or_else(|| (StatusCode::FORBIDDEN, "could not access game with credentials"))?;
+        Ok(Self { game, seat, user_id })
+    }
+}
         
-        let state = state.lock().await;
-        let Session { game_id, seat } = state.sessions.get(&session_id).ok_or(StatusCode::IM_A_TEAPOT)?;
-        let lobby = state.lobbies.get(&game_id).ok_or(StatusCode::IM_A_TEAPOT)?;
+#[derive(Deserialize)]
+struct Authentication {
+    game_id: GameId,
+    user_id: UserId,
+}
 
-        Ok(Self { seat: seat.clone(), lobby: Arc::clone(lobby) })
+#[derive(Serialize)]
+#[serde(tag = "event", content = "data")]
+#[serde(rename_all = "camelCase")]
+enum Respond {
+    Welcome {
+        seat: Seat,
+    },
+    Connected {
+        seat: Seat,
+    },
+    Username {
+        seat: Seat,
+        username: String,
+    },
+    Deal {
+        cards: Cards,
+    },
+    Play {
+        seat: Seat,
+        load: usize,
+        play: Play,
+    },
+    Turn {
+        seat: Seat,
+        control: bool,
+        timer: Option<DurationMillis>,
+    },
+    Prompt {
+        options: Vec<Play>,
+        control: bool,
+        timer: Option<DurationMillis>,
+    },
+    Disconnected {
+        seat: Seat,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+struct DurationMillis(u64);
+
+impl From<Duration> for DurationMillis {
+    fn from(duration: Duration) -> Self {
+        DurationMillis(duration.as_millis() as u64)
     }
 }
 
-struct ExtractActiveSeat {
-    seat: Seat,
-    active: Arc<Mutex<Active>>,
-}
-
-#[async_trait]
-impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractActiveSeat {
-    type Rejection = StatusCode;
-    async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
-        let jar = parts.extract::<CookieJar>().await.expect("infallible");
-        let session_id = jar.get("session-id").ok_or(StatusCode::IM_A_TEAPOT)?;
-        let session_id: SessionId = session_id.value().parse().map_err(|_| StatusCode::IM_A_TEAPOT)?;
-        
-        let state = state.lock().await;
-        let Session { game_id, seat } = state.sessions.get(&session_id).ok_or(StatusCode::IM_A_TEAPOT)?;
-        let active = state.actives.get(&game_id).ok_or(StatusCode::IM_A_TEAPOT)?;
-
-        Ok(Self { seat: seat.clone(), active: Arc::clone(active) })
+impl From<DurationMillis> for Duration {
+    fn from(duration_millis: DurationMillis) -> Self {
+        Duration::from_millis(duration_millis.0)
     }
 }
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
-struct SessionId(u64);
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
+struct UserId(Uuid);
 
-impl FromStr for SessionId {
-    type Err = ParseIntError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(SessionId(s.parse()?))
-    }
-}
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
+struct GameId(Uuid);
 
-impl Display for SessionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+//#[derive(Default)]
+//struct ApiState {
+//    lobbies: HashMap<GameId, Arc<Mutex<Lobby>>>,
+//    actives: HashMap<GameId, Arc<Mutex<Active>>>,
+//    sessions: HashMap<SessionId, Session>,
+//}
+//
+//struct Session {
+//    game_id: GameId,
+//    seat: Seat,
+//}
+//
+//struct Lobby {
+//    sinks: HashMap<Seat, UserTx>,
+//    host: Seat,
+//    seats_left: Vec<Seat>,
+//    action_timer: Option<Duration>,
+//    usernames: HashMap<Seat, String>,
+//}
+//
+//impl Lobby {
+//    async fn new(session_id: SessionId, host_tx: UserTx) -> Self {
+//        let mut seats_left = Vec::from(Seat::ALL);
+//        seats_left.shuffle(&mut thread_rng());
+//        let host_seat = seats_left.pop().unwrap();
+//        let sinks = HashMap::default();
+//        let action_timer = None;
+//        let usernames = HashMap::default();
+//        let mut ret = Self { sinks, host: host_seat, seats_left, action_timer, usernames };
+//        ret.join_announce(host_seat, host_tx).await; 
+//        ret
+//    }
+//
+//    async fn join(
+//        &mut self, 
+//        tx: UserTx,
+//    ) -> Result<(), ()> {
+//        let Some(seat) = self.seats_left.pop() else { return Err(()) };
+//        self.join_announce(seat, tx).await;
+//        Ok(())
+//    }
+//
+//    async fn join_announce(&mut self, seat: Seat, tx: UserTx) {
+//        self.sinks.insert(seat, tx);
+//
+//        todo!("announce")
+//
+//    }
+//    
+//    async fn set_username(&mut self, seat: Seat, new_username: String) {
+//        self.usernames.insert(seat, new_username);
+//        todo!("announce")
+//    }
+//}
+//
+//struct Active {
+//    sinks: HashMap<Seat, UserTx>,
+//    action_timer: Option<Duration>,
+//    start_timestamp: Instant,
+//    last_play: Instant,
+//    game_state: GameState,
+//}
+//
+//struct ExtractLobby {
+//    lobby: Arc<Mutex<Lobby>>,
+//}
+//
+//#[async_trait]
+//impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractLobby {
+//    type Rejection = StatusCode;
+//    async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
+//        let game_id = parts.extract::<Query<Authentication>>().await.map_err(|_| StatusCode::IM_A_TEAPOT)?;
+//        let state = state.lock().await;
+//        let lobby = state.lobbies.get(&game_id).ok_or(StatusCode::IM_A_TEAPOT)?;
+//
+//        Ok(Self { lobby: Arc::clone(lobby) })
+//    }
+//}
+//
+//struct ExtractLobbySeat {
+//    seat: Seat,
+//    lobby: Arc<Mutex<Lobby>>,
+//}
+//
+//#[async_trait]
+//impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractLobbySeat {
+//    type Rejection = StatusCode;
+//    async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
+//        let jar = parts.extract::<CookieJar>().await.expect("infallible");
+//        let session_id = jar.get("session-id").ok_or(StatusCode::IM_A_TEAPOT)?;
+//        let session_id: SessionId = session_id.value().parse().map_err(|_| StatusCode::IM_A_TEAPOT)?;
+//        
+//        let state = state.lock().await;
+//        let Session { game_id, seat } = state.sessions.get(&session_id).ok_or(StatusCode::IM_A_TEAPOT)?;
+//        let lobby = state.lobbies.get(&game_id).ok_or(StatusCode::IM_A_TEAPOT)?;
+//
+//        Ok(Self { seat: seat.clone(), lobby: Arc::clone(lobby) })
+//    }
+//}
+//
+//struct ExtractActiveSeat {
+//    seat: Seat,
+//    active: Arc<Mutex<Active>>,
+//}
+//
+//#[async_trait]
+//impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractActiveSeat {
+//    type Rejection = StatusCode;
+//    async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
+//        let jar = parts.extract::<CookieJar>().await.expect("infallible");
+//        let session_id = jar.get("session-id").ok_or(StatusCode::IM_A_TEAPOT)?;
+//        let session_id: SessionId = session_id.value().parse().map_err(|_| StatusCode::IM_A_TEAPOT)?;
+//        
+//        let state = state.lock().await;
+//        let Session { game_id, seat } = state.sessions.get(&session_id).ok_or(StatusCode::IM_A_TEAPOT)?;
+//        let active = state.actives.get(&game_id).ok_or(StatusCode::IM_A_TEAPOT)?;
+//
+//        Ok(Self { seat: seat.clone(), active: Arc::clone(active) })
+//    }
+//}
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
-struct GameId(u64);
 
 //#[derive(Default)]
 //struct AppState {

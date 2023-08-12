@@ -140,6 +140,7 @@ pub enum GameError {
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Seat {
     North,
     East,

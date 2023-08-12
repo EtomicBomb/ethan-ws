@@ -11,10 +11,10 @@ pub struct Cards {
 }
 
 impl Cards {
-    const CLUBS: Self = Self { bits: 0x1111111111111 };
-    const SPADES: Self = Self { bits: 0x2222222222222 };
-    const HEARTS: Self = Self { bits: 0x4444444444444 }; 
-    const DIAMONDS: Self = Self { bits: 0x8888888888888 }; 
+    pub const CLUBS: Self = Self { bits: 0x1111111111111 };
+    pub const SPADES: Self = Self { bits: 0x2222222222222 };
+    pub const HEARTS: Self = Self { bits: 0x4444444444444 }; 
+    pub const DIAMONDS: Self = Self { bits: 0x8888888888888 }; 
     pub const ENTIRE_DECK: Cards = Self { bits: 0xfffffffffffff };
     pub const SUITS: [Self; 4] = [Self::CLUBS, Self::SPADES, Self::HEARTS, Self::DIAMONDS];
     
@@ -43,7 +43,7 @@ impl Cards {
     }
 
     pub fn is_subset(self, other: Self) -> bool {
-        !self.bits | other.bits != 0
+        self.bits & !other.bits == 0
     }
 
     pub fn disjoint(self, other: Self) -> bool {

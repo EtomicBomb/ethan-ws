@@ -1,7 +1,23 @@
 use serde::{Deserialize, Serialize};
 use super::{Card, Cards};
 use std::fmt;
-use std::mem;
+
+//#[derive(Clone, Copy, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
+//pub enum Play {
+//    Pass,
+//    Single(Single),
+//    Pair(Pair),
+//    Five(Five),
+//}
+//
+//#[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
+//pub enum Five {
+//    Straight(Straight),
+//    Flush(Straight),
+//    FullHouse(Straight),
+//    Four(Four),
+//    StraightFlush(StraightFlush),
+//}
 
 #[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,47 +61,18 @@ impl PlayKind {
             PlayKind::StraightFlush => 5,
         }
     }
-
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Deserialize, Serialize)]
 pub struct Play {
-    cards: Cards,
-    kind: PlayKind,
-    ranking_card: Option<Card>,
+    pub cards: Cards,
+    pub kind: PlayKind,
+    pub ranking_card: Option<Card>,
 }
 
 impl Play {
-    pub fn pass() -> Self {
-        Self {
-            cards: Cards::default(),
-            kind: PlayKind::Pass,
-            ranking_card: None,
-        }
-    }
-
-    fn pair(cards: Cards) -> Self {
-        Self {
-            cards,
-            kind: PlayKind::Pair,
-            ranking_card: cards.max_card(),
-        }
-    }
-
-    fn straight(cards: Cards) -> Self {
-        Self {
-            cards,
-            kind: PlayKind::Straight,
-            ranking_card: cards.max_card(),
-        }
-    }
-
-    fn flush(cards: Cards) -> Self {
-        Self {
-            cards,
-            kind: PlayKind::Flush,
-            ranking_card: cards.max_card(),
-        }
+    fn infer(cards: Cards) -> Option<Play> {
+        todo!()
     }
 
     fn full_house(three_of_a_kind: Cards, pair: Cards) -> Self {
@@ -110,74 +97,8 @@ impl Play {
         }
     }
 
-    fn straight_flush(straight: Self) -> Self {
-        Self {
-            cards: straight.cards,
-            kind: PlayKind::StraightFlush,
-            ranking_card: straight.ranking_card,
-        }
-    }
-
-    pub fn is_pass(self) -> bool {
-        self.kind == PlayKind::Pass
-    }
-
-    #[inline]
-    pub fn len_eq(self, other: Self) -> bool {
+    pub fn same_kind(self, other: Self) -> bool {
         self.kind.len() == other.kind.len()
-    }
-
-    #[inline]
-    pub fn can_play_on(self, other: Self) -> bool {
-        if self.is_pass() { return true }
-
-        if self.kind.len() != other.kind.len() {
-            false
-        } else if self.kind != other.kind {
-            self.kind > other.kind
-        } else {
-            self.ranking_card.unwrap() > other.ranking_card.unwrap()
-        }
-    }
-
-    pub fn kind(self) -> PlayKind {
-        self.kind
-    }
-
-    #[inline]
-    pub fn ranking_card(self) -> Option<Card> {
-        self.ranking_card
-    }
-
-    #[inline]
-    pub fn cards(self) -> Cards {
-        self.cards
-    }
-}
-
-pub struct AllPlays {
-    pub straight_flushes: Vec<Play>,
-    pub four_of_a_kind: Vec<Play>,
-    pub full_houses: Vec<Play>,
-    pub straights: Vec<Play>,
-    pub flushes: Vec<Play>,
-    pub pairs: Vec<Play>,
-    pub singles: Vec<Play>,  
-}
-
-impl AllPlays {
-    pub fn new(cards: Cards) -> Self {
-        let mut rank_blocks = RankBlocks::new(cards);
-
-        AllPlays {
-            straight_flushes: rank_blocks.straight_flushes(),
-            four_of_a_kind: rank_blocks.four_of_a_kinds(),
-            full_houses: rank_blocks.full_houses(),
-            flushes: flushes(cards),
-            straights: mem::take(&mut rank_blocks.straights),
-            pairs: rank_blocks.pairs(),
-            singles: singles(cards),
-        }
     }
 }
 
@@ -256,7 +177,11 @@ impl RankBlocks {
 
     fn pairs(&self) -> Vec<Play> {
         self.n_of_a_kinds(2).into_iter()
-            .map(|cards| Play::pair(cards))
+            .map(|cards| Play {
+                cards,
+                kind: PlayKind::Pair,
+                ranking_card: cards.max_card(),
+            })
             .collect()
     }
 
@@ -292,8 +217,12 @@ impl RankBlocks {
 
     fn straight_flushes(&self) -> Vec<Play> {
         self.straights.iter()
-            .filter(|straight| straight.cards().all_same_suit())
-            .map(|&straight| Play::straight_flush(straight))
+            .filter(|straight| straight.cards.all_same_suit())
+            .map(|&straight| Play {
+                cards: straight.cards,
+                kind: PlayKind::StraightFlush,
+                ranking_card: straight.ranking_card,
+            })
             .collect()
     }
 }
@@ -319,11 +248,14 @@ fn flushes(cards: Cards) -> Vec<Play> {
     suit_blocks.iter()
         .copied()
         .filter(|b| b.len() >= 5)
-        .map(|block| {
+        .flat_map(|block| {
             permute(block, 5).into_iter()
-                .map(Play::flush)
+                .map(|cards| Play {
+                    cards,
+                    kind: PlayKind::Flush,
+                    ranking_card: cards.max_card(),
+                })
         })
-        .flatten()
         .collect()
 }
 
@@ -339,7 +271,11 @@ fn straight_from_block(
             .map(|(block, &i)| block[i])
             .collect();
 
-        straights.push(Play::straight(cards));
+        straights.push(Play {
+            cards,
+            kind: PlayKind::Straight,
+            ranking_card: cards.max_card(),
+        });
     };
 
     counter(&base, f);

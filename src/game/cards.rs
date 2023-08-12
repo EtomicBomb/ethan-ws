@@ -3,7 +3,7 @@ use serde::de::{Deserialize, Deserializer, Visitor, SeqAccess};
 use serde::ser::{Serialize, Serializer, SerializeSeq};
 use std::fmt;
 use std::str::FromStr;
-use std::iter::{FromIterator, FusedIterator};
+use std::iter::{FromIterator};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Cards {
@@ -20,6 +20,12 @@ impl Cards {
     
     pub const fn single(card: Card) -> Self {
         Self { bits: 1 << card.index }
+    }
+
+    pub fn copy_rank(card: Card) -> Self {
+        let rank = card.rank();
+        let bits = 0xf << (4 * rank);
+        Cards { bits }
     }
 
     pub fn insert(&mut self, card: Card) {
@@ -52,6 +58,11 @@ impl Cards {
 
     pub fn is_empty(self) -> bool {
         self.bits == 0
+    }
+
+    pub fn intersection(self, other: Self) -> Self {
+        let bits = self.bits & other.bits;
+        Cards { bits }
     }
 
     pub fn len(self) -> usize {
@@ -191,8 +202,8 @@ impl Card {
     }
 }
 
-const RANKS: [&'static str; 13] = ["3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A", "2"];
-const SUITS: [&'static str; 4] = ["♣", "♠", "♥", "♦"];
+const RANKS: [&str; 13] = ["3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A", "2"];
+const SUITS: [&str; 4] = ["♣", "♠", "♥", "♦"];
 
 impl fmt::Display for Card {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

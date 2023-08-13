@@ -1,7 +1,7 @@
-use rand::{thread_rng};
 use rand::seq::SliceRandom;
+use rand::thread_rng;
 
-use super::{Play, GameState, Cards, PlayError};
+use super::{Cards, GameState, Play, PlayError};
 
 pub fn choose_play(game: &GameState) -> Play {
     let game = SafeGameInterface { game };
@@ -17,15 +17,15 @@ impl<'a> SafeGameInterface<'a> {
     fn my_hand(&self) -> Cards {
         self.game.my_hand()
     }
-    
+
     fn cards_on_table(&self) -> Option<Play> {
         self.game.cards_on_table()
     }
-    
+
     fn valid_plays(&self) -> Vec<Play> {
         self.game.valid_plays()
     }
-    
+
     fn can_play(&self, cards: Cards) -> Result<Play, PlayError> {
         self.game.can_play(cards)
     }

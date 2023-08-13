@@ -1,9 +1,9 @@
 mod bot;
 mod cards;
-mod state;
 mod plays;
+mod state;
 
-pub use plays::{PlayKind, Play};
-pub use state::{Seat, GameState, PlayError};
-pub use cards::{Cards, Card};
 pub use bot::choose_play;
+pub use cards::{Card, Cards};
+pub use plays::{Play, PlayKind};
+pub use state::{GameState, PlayError, Seat};

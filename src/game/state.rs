@@ -1,10 +1,9 @@
-use super::{Play, Card, Cards, PlayKind};
-use rand::{thread_rng};
-use std::iter::once;
+use super::{Card, Cards, Play, PlayKind};
 use rand::seq::SliceRandom;
-use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
+use rand::thread_rng;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 
 #[derive(Debug)]
@@ -21,12 +20,14 @@ impl Default for GameState {
         let mut deck = Vec::from_iter(Cards::ENTIRE_DECK);
         deck.shuffle(&mut thread_rng());
 
-        let hands: HashMap<_, _> = Seat::ALL.into_iter()
+        let hands: HashMap<_, _> = Seat::ALL
+            .into_iter()
             .zip(deck.chunks(13))
             .map(|(seat, hand)| (seat, Cards::from_iter(hand.iter().cloned())))
             .collect();
 
-        let (&current_player, _) = hands.iter()
+        let (&current_player, _) = hands
+            .iter()
             .find(|(_, hand)| hand.contains(Card::THREE_OF_CLUBS))
             .unwrap();
 
@@ -42,13 +43,12 @@ impl Default for GameState {
 
 impl GameState {
     pub fn valid_plays(&self) -> Vec<Play> {
-        let pass = Play { cards: Cards::default(), kind: PlayKind::Pass };
-        once(pass)
-            .chain(Play::all(self.my_hand()))
-            .filter(|&p| self.can_play(p.cards).is_ok())
+        Play::all(self.my_hand())
+            .into_iter()
+            .filter(|p| self.can_play(p.cards).is_ok())
             .collect()
     }
-    
+
     pub fn can_play(&self, cards: Cards) -> Result<Play, PlayError> {
         let play = Play::infer(cards).ok_or(PlayError::NonsenseCards)?;
 
@@ -62,7 +62,7 @@ impl GameState {
             } else {
                 Err(PlayError::IsntPlayingThreeOfClubs)
             };
-        } 
+        }
 
         if self.has_control() {
             return if play.is_pass() {
@@ -70,7 +70,7 @@ impl GameState {
             } else {
                 Ok(play)
             };
-        } 
+        }
 
         let cards_down = self.cards_on_table.unwrap();
 
@@ -88,7 +88,7 @@ impl GameState {
 
         Ok(play)
     }
-    
+
     pub fn play(&mut self, cards: Cards) -> Result<Play, PlayError> {
         let play = self.can_play(cards)?;
 
@@ -101,7 +101,7 @@ impl GameState {
 
         if !play.is_pass() {
             self.last_player_to_not_pass = self.current_player;
-            self.cards_on_table = Some(play); 
+            self.cards_on_table = Some(play);
         }
 
         self.current_player = self.current_player.next();
@@ -125,7 +125,9 @@ impl GameState {
         self.hand(self.current_player)
     }
 
-    pub fn current_player(&self) -> Seat { self.current_player }
+    pub fn current_player(&self) -> Seat {
+        self.current_player
+    }
 
     pub fn is_first_turn(&self) -> bool {
         self.cards_on_table.is_none()

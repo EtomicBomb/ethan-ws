@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::{Card, Cards};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Deserialize, Serialize)]
 pub struct Play {
@@ -22,6 +22,10 @@ impl Play {
         let straights = rank_blocks.straights();
 
         let mut plays = Vec::new();
+        plays.push(Play {
+            cards: Cards::default(),
+            kind: PlayKind::Pass,
+        });
         plays.append(&mut rank_blocks.singles());
         plays.append(&mut rank_blocks.pairs());
         plays.extend(straights.iter().cloned());
@@ -35,7 +39,6 @@ impl Play {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub enum PlayKind {
     Pass,
     Single(Card),
@@ -44,7 +47,6 @@ pub enum PlayKind {
 }
 
 #[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub enum Poker {
     Straight(Card),
     Flush(Card),
@@ -68,34 +70,33 @@ impl PlayKind {
             if cards.len() == 2 && cards.all_same_rank() {
                 return Some(PlayKind::Pair(ranking_card));
             }
-            
+
             match (cards.len(), is_straight(cards), cards.all_same_suit()) {
-                (5, true, true) => return Some(PlayKind::Poker(Poker::StraightFlush(ranking_card))),
+                (5, true, true) => {
+                    return Some(PlayKind::Poker(Poker::StraightFlush(ranking_card)))
+                }
                 (5, true, false) => return Some(PlayKind::Poker(Poker::Straight(ranking_card))),
                 (5, false, true) => return Some(PlayKind::Poker(Poker::Flush(ranking_card))),
-                _ => {},
+                _ => {}
             }
         }
 
         {
-            let mut xs = [
-                cards.min().unwrap(),
-                cards.max().unwrap(),
-            ].map(|x| Cards::copy_rank(x).intersection(cards));
+            let mut xs = [cards.min().unwrap(), cards.max().unwrap()]
+                .map(|x| Cards::copy_rank(x).intersection(cards));
             xs.sort_by_key(|x| x.len());
             let [a, b] = xs;
             let ranking_card = b.max().unwrap();
             match (a.len(), b.len()) {
                 (2, 3) => return Some(PlayKind::Poker(Poker::FullHouse(ranking_card))),
                 (1, 4) => return Some(PlayKind::Poker(Poker::Quadruple(ranking_card))),
-                _ => {},
+                _ => {}
             }
         }
 
         None
     }
 }
-
 
 struct RankBlocks {
     cards: Cards,
@@ -114,36 +115,40 @@ impl RankBlocks {
     }
 
     fn singles(&self) -> Vec<Play> {
-        self.cards.into_iter()
-            .map(|card| Play { 
-                cards: Cards::single(card), 
-                kind: PlayKind::Single(card), 
+        self.cards
+            .into_iter()
+            .map(|card| Play {
+                cards: Cards::single(card),
+                kind: PlayKind::Single(card),
             })
-            .collect() 
+            .collect()
     }
 
     fn pairs(&self) -> Vec<Play> {
-        self.blocks.iter()
-            .flat_map(|block| block.pairs.iter().map(|&cards| {
-                let ranking_card = cards.max().unwrap();
-                let kind = PlayKind::Pair(ranking_card);
-                Play { cards, kind }
-            }))
-        .collect()
+        self.blocks
+            .iter()
+            .flat_map(|block| {
+                block.pairs.iter().map(|&cards| {
+                    let ranking_card = cards.max().unwrap();
+                    let kind = PlayKind::Pair(ranking_card);
+                    Play { cards, kind }
+                })
+            })
+            .collect()
     }
 
     fn straights(&self) -> Vec<Play> {
         let mut ret = Vec::new();
 
         for i in 0..13 {
-            let blocks = Vec::from_iter(
-                (i..i+5).map(|i| &self.blocks[i%13].singles)
-            );
+            let blocks = Vec::from_iter((i..i + 5).map(|i| &self.blocks[i % 13].singles));
 
             let base = Vec::from_iter(blocks.iter().map(|b| b.len()));
 
             counter(&base, |x| {
-                let cards: Cards = blocks.iter().zip(x.iter())
+                let cards: Cards = blocks
+                    .iter()
+                    .zip(x.iter())
                     .map(|(block, &i)| block[i])
                     .collect();
 
@@ -172,7 +177,7 @@ impl RankBlocks {
 
         let mut ret = Vec::new();
         for i in 0..self.blocks.len() {
-            for j in i+1..self.blocks.len() {
+            for j in i + 1..self.blocks.len() {
                 helper(&self.blocks[i], &self.blocks[j], &mut ret);
                 helper(&self.blocks[j], &self.blocks[i], &mut ret);
             }
@@ -194,7 +199,7 @@ impl RankBlocks {
 
         let mut ret = Vec::new();
         for i in 0..self.blocks.len() {
-            for j in i+1..self.blocks.len() {
+            for j in i + 1..self.blocks.len() {
                 helper(&self.blocks[i], &self.blocks[j], &mut ret);
                 helper(&self.blocks[j], &self.blocks[i], &mut ret);
             }
@@ -267,7 +272,8 @@ fn flushes(cards: Cards) -> Vec<Play> {
 }
 
 fn straight_flushes(straights: &[Play]) -> Vec<Play> {
-    straights.iter()
+    straights
+        .iter()
         .filter(|straight| straight.cards.all_same_suit())
         .map(|&straight| Play {
             cards: straight.cards,
@@ -279,27 +285,34 @@ fn straight_flushes(straights: &[Play]) -> Vec<Play> {
 fn is_straight(cards: Cards) -> bool {
     let straights_start = 11; // the contiguous block of valid straights starts at aces
     let num_straights = 10; // there are 10 kinds of straights (starting or ending at ace)
-    (straights_start..straights_start+num_straights).any(|i| {
-        (i..i+5).map(|j| Cards::with_rank(j%13)).all(|rank| !rank.disjoint(cards))
+    (straights_start..straights_start + num_straights).any(|i| {
+        (i..i + 5)
+            .map(|j| Cards::with_rank(j % 13))
+            .all(|rank| !rank.disjoint(cards))
     })
 }
 
 fn counter<F: FnMut(&'_ [usize])>(base: &[usize], mut visit: F) {
-    if base.iter().any(|&b| b == 0) { return }
+    if base.iter().any(|&b| b == 0) {
+        return;
+    }
+
     let len = base.len();
-    let mut x = vec![0; len];
+    let mut xs = vec![0; len];
 
     loop {
-        visit(&x);
+        visit(&xs);
 
         // try to "add one" to x
         let mut i = 0;
         while i < len {
-            if x[i] < base[i]-1 { break }
-            x[i] = 0;
+            if xs[i] < base[i] - 1 {
+                break;
+            }
+            xs[i] = 0;
             i += 1;
         }
-        if i == len { break }
-        x[i] += 1;
+        let Some(x) = xs.get_mut(i) else { break };
+        *x += 1;
     }
 }

@@ -1,38 +1,50 @@
+use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
+use serde::ser::{Serialize, SerializeSeq, Serializer};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
-use serde::de::{Deserialize, Deserializer, Visitor, SeqAccess};
-use serde::ser::{Serialize, Serializer, SerializeSeq};
 use std::fmt;
+use std::iter::FromIterator;
 use std::str::FromStr;
-use std::iter::{FromIterator};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Cards {
-    bits: u64, // in suit-major order, with 3♣ as the least significant bit 
+    bits: u64, // in suit-major order, with 3♣ as the least significant bit
 }
 
 impl Cards {
-    pub const CLUBS: Self = Self { bits: 0x1111111111111 };
-    pub const SPADES: Self = Self { bits: 0x2222222222222 };
-    pub const HEARTS: Self = Self { bits: 0x4444444444444 }; 
-    pub const DIAMONDS: Self = Self { bits: 0x8888888888888 }; 
-    pub const ENTIRE_DECK: Cards = Self { bits: 0xfffffffffffff };
+    pub const CLUBS: Self = Self {
+        bits: 0x1111111111111,
+    };
+    pub const SPADES: Self = Self {
+        bits: 0x2222222222222,
+    };
+    pub const HEARTS: Self = Self {
+        bits: 0x4444444444444,
+    };
+    pub const DIAMONDS: Self = Self {
+        bits: 0x8888888888888,
+    };
+    pub const ENTIRE_DECK: Cards = Self {
+        bits: 0xfffffffffffff,
+    };
     pub const SUITS: [Self; 4] = [Self::CLUBS, Self::SPADES, Self::HEARTS, Self::DIAMONDS];
-//    pub const THREES: Self = Self::with_rank(0); 
-//    pub const FOURS: Self = Self::with_rank(1); 
-//    pub const FIVES: Self = Self::with_rank(2); 
-//    pub const SIXES: Self = Self::with_rank(3); 
-//    pub const SEVENS: Self = Self::with_rank(4); 
-//    pub const EIGHTS: Self = Self::with_rank(5); 
-//    pub const NINES: Self = Self::with_rank(6); 
-//    pub const TENS: Self = Self::with_rank(7); 
-//    pub const JACKS: Self = Self::with_rank(8); 
-//    pub const QUEENS: Self = Self::with_rank(9); 
-//    pub const KINGS: Self = Self::with_rank(10); 
-//    pub const ACES: Self = Self::with_rank(11); 
-//    pub const TWOS: Self = Self::with_rank(12); 
-    
+    //    pub const THREES: Self = Self::with_rank(0);
+    //    pub const FOURS: Self = Self::with_rank(1);
+    //    pub const FIVES: Self = Self::with_rank(2);
+    //    pub const SIXES: Self = Self::with_rank(3);
+    //    pub const SEVENS: Self = Self::with_rank(4);
+    //    pub const EIGHTS: Self = Self::with_rank(5);
+    //    pub const NINES: Self = Self::with_rank(6);
+    //    pub const TENS: Self = Self::with_rank(7);
+    //    pub const JACKS: Self = Self::with_rank(8);
+    //    pub const QUEENS: Self = Self::with_rank(9);
+    //    pub const KINGS: Self = Self::with_rank(10);
+    //    pub const ACES: Self = Self::with_rank(11);
+    //    pub const TWOS: Self = Self::with_rank(12);
+
     pub const fn single(card: Card) -> Self {
-        Self { bits: 1 << card.index }
+        Self {
+            bits: 1 << card.index,
+        }
     }
 
     pub const fn with_rank(rank: u8) -> Self {
@@ -51,7 +63,9 @@ impl Cards {
 
     #[must_use]
     pub fn insert_all(self, other: Self) -> Self {
-        Self { bits: self.bits | other.bits }
+        Self {
+            bits: self.bits | other.bits,
+        }
     }
 
     #[must_use]
@@ -61,7 +75,9 @@ impl Cards {
 
     #[must_use]
     pub fn remove_all(self, other: Self) -> Self {
-        Self { bits: self.bits & !other.bits }
+        Self {
+            bits: self.bits & !other.bits,
+        }
     }
 
     pub fn contains(self, card: Card) -> bool {
@@ -73,7 +89,7 @@ impl Cards {
     }
 
     pub fn disjoint(self, other: Self) -> bool {
-        self.bits & other.bits == 0 
+        self.bits & other.bits == 0
     }
 
     pub fn is_empty(self) -> bool {
@@ -81,7 +97,9 @@ impl Cards {
     }
 
     pub fn intersection(self, other: Self) -> Self {
-        Cards { bits: self.bits & other.bits }
+        Cards {
+            bits: self.bits & other.bits,
+        }
     }
 
     pub fn len(self) -> usize {
@@ -99,15 +117,21 @@ impl Cards {
     }
 
     pub fn min(self) -> Option<Card> {
-        if self.is_empty() { return None }
+        if self.is_empty() {
+            return None;
+        }
         let n = self.bits.trailing_zeros();
         Some(Card { index: n as u8 })
     }
 
     pub fn max(self) -> Option<Card> {
-        if self.is_empty() { return None }
+        if self.is_empty() {
+            return None;
+        }
         let n = self.bits.leading_zeros();
-        Some(Card { index: 63 - n as u8 })
+        Some(Card {
+            index: 63 - n as u8,
+        })
     }
 }
 
@@ -118,7 +142,7 @@ impl fmt::Debug for Cards {
 }
 
 impl Extend<Card> for Cards {
-    fn extend<I: IntoIterator<Item=Card>>(&mut self, iter: I) {
+    fn extend<I: IntoIterator<Item = Card>>(&mut self, iter: I) {
         for card in iter.into_iter() {
             *self = self.insert(card);
         }
@@ -126,7 +150,7 @@ impl Extend<Card> for Cards {
 }
 
 impl FromIterator<Card> for Cards {
-    fn from_iter<I: IntoIterator<Item=Card>>(iter: I) -> Self {
+    fn from_iter<I: IntoIterator<Item = Card>>(iter: I) -> Self {
         let mut cards = Cards::default();
         cards.extend(iter);
         cards
@@ -197,7 +221,9 @@ impl Iterator for CardsIter {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, SerializeDisplay, DeserializeFromStr)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, SerializeDisplay, DeserializeFromStr,
+)]
 pub struct Card {
     index: u8,
 }
@@ -214,7 +240,9 @@ impl Card {
     }
 }
 
-const RANKS: [&str; 13] = ["3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A", "2"];
+const RANKS: [&str; 13] = [
+    "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A", "2",
+];
 const SUITS: [&str; 4] = ["♣", "♠", "♥", "♦"];
 
 impl fmt::Display for Card {
@@ -232,7 +260,7 @@ impl fmt::Debug for Card {
 }
 
 #[derive(Debug)]
-pub struct ToCardError; 
+pub struct ToCardError;
 
 impl fmt::Display for ToCardError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -245,18 +273,26 @@ impl FromStr for Card {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let rank = s.get(0..1).ok_or(ToCardError)?;
-        let rank = RANKS.into_iter().position(|r| rank == r).ok_or(ToCardError)? as u8;
+        let rank = RANKS
+            .into_iter()
+            .position(|r| rank == r)
+            .ok_or(ToCardError)? as u8;
         let suit = s.get(1..).ok_or(ToCardError)?;
-        let suit = SUITS.into_iter().position(|s| suit == s).ok_or(ToCardError)? as u8;
-        Ok(Card { index: rank * 4 + suit })
+        let suit = SUITS
+            .into_iter()
+            .position(|s| suit == s)
+            .ok_or(ToCardError)? as u8;
+        Ok(Card {
+            index: rank * 4 + suit,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Card, Cards};
-    use std::collections::HashSet;
     use serde_json;
+    use std::collections::HashSet;
     use std::iter::once;
 
     #[test]
@@ -302,7 +338,6 @@ mod tests {
         assert_eq!(s, "\"3♠\"");
     }
 
-
     #[test]
     fn cards_encoding_round_trip() {
         let cardss = once(Cards::ENTIRE_DECK)
@@ -327,5 +362,4 @@ mod tests {
             assert_eq!(card, c);
         }
     }
-
 }

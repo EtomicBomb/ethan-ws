@@ -1,69 +1,61 @@
-//#![allow(dead_code)]
-//#![allow(unused_imports)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
 use axum::{
-    routing::{get, post, put}, 
-    extract::{Query, FromRequestParts},
-    Router,
-    Json,
-    RequestPartsExt, 
-    async_trait,
-    debug_handler,
+    async_trait, debug_handler,
+    extract::{FromRequestParts, Query},
     response::{
-        sse::{self, KeepAlive, Sse}, 
-        IntoResponse
+        sse::{self, KeepAlive, Sse},
+        IntoResponse,
     },
+    routing::{get, post, put},
+    Json, RequestPartsExt, Router,
 };
 //use axum_server::tls_rustls::RustlsConfig;
-use std::{
-    net::SocketAddr,
-    collections::{HashMap},
-    time::{Duration},
-    sync::{Arc},
-    convert::Infallible,
-    sync::{Weak},
+use futures::future::BoxFuture;
+use http::{
+    header::{self, HeaderValue},
+    request::Parts,
+    status::StatusCode,
+    HeaderMap,
 };
+use rand::{seq::SliceRandom, thread_rng, Rng};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc, sync::Weak,
+    time::Duration,
+};
+use tokio::{
+    sync::mpsc::{self, UnboundedSender},
+    sync::Mutex,
+    task,
+    time::{sleep_until, Instant},
+};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_http::{
     services::{ServeDir, ServeFile},
     set_header::SetResponseHeaderLayer,
 };
-use http::{
-    header::{self, HeaderValue},
-    status::StatusCode,
-    request::Parts,
-    HeaderMap,
-};
-use tokio::{
-    time::{Instant, sleep_until},
-    sync::{Mutex},
-    task,
-    sync::mpsc::{self, UnboundedSender},
-};
-use tokio_stream::{wrappers::UnboundedReceiverStream};
-use futures::future::BoxFuture;
-use serde::{Serialize, Deserialize};
-use rand::{thread_rng, Rng, seq::SliceRandom};
 use uuid::Uuid;
 
-
 mod game;
-use crate::game::{GameState, choose_play, Seat, Cards, Play};
+use crate::game::{choose_play, Cards, GameState, Seat};
 
 #[tokio::main]
 async fn main() {
-//    let config = RustlsConfig::from_pem_file( // TODO: revert on deploy
-//        "secret/cert.pem",
-//        "secret/key.pem",
-//    )
-//    .await
-//    .unwrap();
+    //    let config = RustlsConfig::from_pem_file( // TODO: revert on deploy
+    //        "secret/cert.pem",
+    //        "secret/key.pem",
+    //    )
+    //    .await
+    //    .unwrap();
 
     let app = app();
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
     eprintln!("listening on {}", addr);
 
-//    axum_server::bind_rustls(addr, config) // TODO: revert on deploy
+    //    axum_server::bind_rustls(addr, config) // TODO: revert on deploy
     axum_server::bind(addr)
         .serve(app.into_make_service())
         .await
@@ -78,9 +70,10 @@ fn app() -> Router {
     Router::new()
         .nest("/api", api())
         .nest_service("/", serve_dir)
-        .layer(SetResponseHeaderLayer::overriding( // TODO: revert debug
-            header::CACHE_CONTROL, 
-            HeaderValue::from_static("no-store, must-revalidate")
+        .layer(SetResponseHeaderLayer::overriding(
+            // TODO: revert debug
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, must-revalidate"),
         ))
 }
 
@@ -101,13 +94,11 @@ fn api() -> Router {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JoinResponse {
-    user_id: UserId, 
+    user_id: UserId,
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn join(
-    ExtractGameNoSeat { game }: ExtractGameNoSeat,
-) -> Result<impl IntoResponse, ()> {
+async fn join(ExtractGameNoSeat { game }: ExtractGameNoSeat) -> Result<impl IntoResponse, ()> {
     let mut game = game.lock().await;
     let user_id = game.join().await?;
     // TODO: I want to use Authorization header authentication
@@ -117,10 +108,13 @@ async fn join(
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn subscribe(
-    ExtractGame { game, seat, user_id }: ExtractGame,
+    ExtractGame {
+        game,
+        seat,
+        user_id,
+    }: ExtractGame,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-
     dbg!(user_id, seat, &headers);
 
     let game2 = Arc::clone(&game);
@@ -169,9 +163,7 @@ async fn action_timer(
     game.action_timer(seat, millis).await
 }
 
-async fn start_game(
-    ExtractGame { game, seat, .. }: ExtractGame,
-) -> Result<impl IntoResponse, ()> {
+async fn start_game(ExtractGame { game, seat, .. }: ExtractGame) -> Result<impl IntoResponse, ()> {
     let mut game = game.lock().await;
     game.start_game(seat).await
 }
@@ -189,7 +181,6 @@ async fn play(
     game.human_play(seat, cards).await
 }
 
-
 #[derive(Default)]
 struct ApiState {
     games: HashMap<GameId, Arc<Mutex<Game>>>,
@@ -198,10 +189,10 @@ struct ApiState {
 impl ApiState {
     fn get_game(&mut self, game_id: GameId) -> Arc<Mutex<Game>> {
         // TODO: timeout and delete game if nobody subscribes?
-        let game = self.games.entry(game_id)
-            .or_insert_with(|| Arc::new_cyclic(|weak| {
-                Mutex::new(Game::new(Weak::clone(weak)))
-            }));
+        let game = self
+            .games
+            .entry(game_id)
+            .or_insert_with(|| Arc::new_cyclic(|weak| Mutex::new(Game::new(Weak::clone(weak)))));
         Arc::clone(game)
     }
 }
@@ -220,7 +211,8 @@ impl Game {
     fn new(this: Weak<Mutex<Self>>) -> Self {
         let mut seats_left = Vec::from(Seat::ALL);
         seats_left.shuffle(&mut thread_rng());
-        let usernames = Seat::ALL.into_iter()
+        let usernames = Seat::ALL
+            .into_iter()
             .map(|seat| (seat, format!("{:?}", seat)))
             .collect();
         Self {
@@ -246,7 +238,7 @@ impl Game {
         let user_id = UserId(user_id);
         self.users.insert(user_id, seat);
         let is_host = seats_left.len() == 3;
-        if is_host { 
+        if is_host {
             self.host = Some(seat);
         }
         // TODO: ensure that user has subscribed within a couple seconds
@@ -262,11 +254,21 @@ impl Game {
         let _ = self.respond(seat, &Respond::Welcome { seat }).await;
         let humans: Vec<_> = self.users.values().cloned().collect();
         for &other in humans.iter() {
-            let _ = self.respond(seat, &Respond::Connected { seat: other }).await;
+            let _ = self
+                .respond(seat, &Respond::Connected { seat: other })
+                .await;
         }
         for other in Seat::ALL {
             let username = self.usernames[&other].clone();
-            let _ = self.respond(seat, &Respond::Username { seat: other, username }).await;
+            let _ = self
+                .respond(
+                    seat,
+                    &Respond::Username {
+                        seat: other,
+                        username,
+                    },
+                )
+                .await;
         }
 
         // TODO: complete new subscription package with era details
@@ -275,25 +277,33 @@ impl Game {
     async fn username(&mut self, seat: Seat, username: String) {
         self.usernames.insert(seat, username.clone());
         for other in Seat::ALL {
-            if seat == other { continue }
+            if seat == other {
+                continue;
+            }
             let username = username.clone();
-            let _ = self.respond(other, &Respond::Username { seat, username }).await;
+            let _ = self
+                .respond(other, &Respond::Username { seat, username })
+                .await;
         }
     }
 
     async fn action_timer(&mut self, seat: Seat, millis: Option<DurationMillis>) -> Result<(), ()> {
-        if self.host != Some(seat) { return Err(()) }
+        if self.host != Some(seat) {
+            return Err(());
+        }
         self.action_timer = millis.map(Duration::from);
         Ok(())
     }
 
     async fn start_game(&mut self, seat: Seat) -> Result<(), ()> {
         // TODO: probably don't want to start a game when there already is one active
-        if self.host != Some(seat) { return Err(()) }
-        
-        self.era = Era::Active { 
-            game_state: GameState::default(), 
-            deadline: None
+        if self.host != Some(seat) {
+            return Err(());
+        }
+
+        self.era = Era::Active {
+            game_state: GameState::default(),
+            deadline: None,
         };
 
         let Era::Active { game_state, .. } = &mut self.era else { unreachable!() };
@@ -316,23 +326,35 @@ impl Game {
     async fn human_play(&mut self, seat: Seat, cards: Cards) -> Result<(), ()> {
         let Era::Active { game_state, .. } = &mut self.era else { return Err(()) };
         let current_player = game_state.current_player();
-        if seat != current_player { return Err(()) }
+        if seat != current_player {
+            return Err(());
+        }
         self.play(seat, cards).await
     }
 
     async fn play(&mut self, seat: Seat, cards: Cards) -> Result<(), ()> {
         let Era::Active { game_state, .. } = &mut self.era else { return Err(()) };
 
-        let play = game_state.play(cards).map_err(|_| ())?;
-        let pass = play.is_pass();
+        game_state.play(cards).map_err(|_| ())?;
+        let pass = cards.len() == 0;
         let load = game_state.hand(seat).len();
+        let win = load == 0;
         for other in Seat::ALL {
-            let _ = self.respond(other, &Respond::Play { seat, load, pass, cards }).await;
+            let _ = self
+                .respond(
+                    other,
+                    &Respond::Play {
+                        seat,
+                        load,
+                        pass,
+                        cards,
+                    },
+                )
+                .await;
         }
 
-        let win = load == 0;
         if win {
-            self.era = Era::Win { };
+            self.era = Era::Win {};
         } else {
             let _ = self.solicit().await;
         }
@@ -354,7 +376,7 @@ impl Game {
 
     async fn solicit(&mut self) -> Result<(), ()> {
         let bot_timer = Duration::from_millis(1000);
-        
+
         let Era::Active { game_state, deadline: old_deadline } = &mut self.era else { return Err(()) };
         let current_player = game_state.current_player();
         let timer = match self.txs.get(&current_player) {
@@ -366,11 +388,16 @@ impl Game {
 
         let control = game_state.has_control();
         for other in Seat::ALL {
-            let _ = self.respond(other, &Respond::Turn { 
-                seat: current_player, 
-                control,
-                timer: timer.map(DurationMillis::from), 
-            }).await;
+            let _ = self
+                .respond(
+                    other,
+                    &Respond::Turn {
+                        seat: current_player,
+                        control,
+                        timer: timer.map(DurationMillis::from),
+                    },
+                )
+                .await;
         }
 
         let this = Weak::clone(&self.this);
@@ -383,20 +410,23 @@ impl Game {
     // BoxFuture to break recursion
     fn force_play(this: Weak<Mutex<Self>>) -> BoxFuture<'static, Result<(), ()>> {
         Box::pin(async move {
-            {
+            let deadline = {
                 let Some(this) = this.upgrade() else { return Err(()) };
                 let this = this.lock().await;
                 let Era::Active { deadline: Some(deadline), .. } = this.era else { return Err(()) };
-                sleep_until(deadline).await;
-            }
+                deadline
+            };
+            sleep_until(deadline).await;
 
             let Some(this) = this.upgrade() else { return Err(()) };
             let mut this = this.lock().await;
             let Era::Active { deadline: Some(deadline), .. } = this.era else { return Err(()) };
-            if Instant::now() < deadline { return Err(()) }
+            if Instant::now() < deadline {
+                return Err(());
+            }
 
             // TODO: can choose a worse bot here if we're forcing a human player
-            let _ = this.auto_play().await;
+            this.auto_play().await.unwrap();
             Ok(())
         })
     }
@@ -404,16 +434,16 @@ impl Game {
     async fn respond(&mut self, seat: Seat, response: &Respond) -> Result<(), ()> {
         let response = serde_json::to_value(response).unwrap();
         let response = sse::Event::default()
-            .json_data(&response["data"]).unwrap()
+            .json_data(&response["data"])
+            .unwrap()
             .event(response["event"].as_str().unwrap());
-//            .retry(Duration::from_millis(1000));
+        //            .retry(Duration::from_millis(1000));
         let response = Ok::<_, Infallible>(response);
         let tx = self.txs.get(&seat).ok_or(())?;
         tx.send(response).map_err(|_| ())?;
         Ok(())
     }
 }
-
 
 enum Era {
     Lobby {
@@ -423,7 +453,7 @@ enum Era {
         game_state: GameState,
         deadline: Option<Instant>,
     },
-    Win { },
+    Win {},
 }
 
 type UserTx = UnboundedSender<Result<sse::Event, Infallible>>;
@@ -435,13 +465,18 @@ struct ExtractGameNoSeat {
 #[async_trait]
 impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractGameNoSeat {
     type Rejection = StatusCode;
-    async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<Mutex<ApiState>>,
+    ) -> Result<Self, Self::Rejection> {
         #[derive(Deserialize)]
         struct AuthGameId {
             game_id: GameId,
         }
 
-        let Query(AuthGameId { game_id }) = parts.extract::<Query<AuthGameId>>().await
+        let Query(AuthGameId { game_id }) = parts
+            .extract::<Query<AuthGameId>>()
+            .await
             .map_err(|_| StatusCode::FORBIDDEN)?;
         let game = state.lock().await.get_game(game_id);
         Ok(Self { game })
@@ -457,16 +492,27 @@ struct ExtractGame {
 #[async_trait]
 impl FromRequestParts<Arc<Mutex<ApiState>>> for ExtractGame {
     type Rejection = (StatusCode, &'static str);
-    async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
-        let Query(Authentication { game_id, user_id }) = parts.extract::<Query<Authentication>>().await
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<Mutex<ApiState>>,
+    ) -> Result<Self, Self::Rejection> {
+        let Query(Authentication { game_id, user_id }) = parts
+            .extract::<Query<Authentication>>()
+            .await
             .map_err(|_| (StatusCode::FORBIDDEN, "expected user and game id: {}"))?;
         let game = state.lock().await.get_game(game_id);
-        let seat = game.lock().await.get_seat(user_id)
-            .ok_or((StatusCode::FORBIDDEN, "could not access game with credentials"))?;
-        Ok(Self { game, seat, user_id })
+        let seat = game.lock().await.get_seat(user_id).ok_or((
+            StatusCode::FORBIDDEN,
+            "could not access game with credentials",
+        ))?;
+        Ok(Self {
+            game,
+            seat,
+            user_id,
+        })
     }
 }
-        
+
 #[derive(Deserialize)]
 struct Authentication {
     game_id: GameId,

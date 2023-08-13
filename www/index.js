@@ -61,7 +61,6 @@ class Game {
         connection.addEventListener('deal', async ({ data }) => await this.onDeal(JSON.parse(data)));
         connection.addEventListener('play', async ({ data }) => await this.onPlay(JSON.parse(data)));
         connection.addEventListener('turn', async ({ data }) => await this.onTurn(JSON.parse(data)));
-        connection.addEventListener('prompt', async ({ data }) => await this.onPrompt(JSON.parse(data)))
         connection.addEventListener('disconnected', async ({ data }) => await this.onDisconnected(JSON.parse(data)));
         connection.addEventListener('message', (e) => {
             throw new Error('received unspecified message', { cause: e });
@@ -114,13 +113,13 @@ class Game {
         });
 
         $('#play-cards-button').addEventListener('click', async (e) => {
-            const playIndex = parseInt($('#play-cards').value, 10);
-            const play = this.options[playIndex];
-            console.log('playing', playIndex, play);
+            const value = $('#play-cards').value;
+            const cards = value === '' ? [] : value.split(',');
+            console.log('playing', cards);
             const url = this.apiURL('/api/play');
             const method = 'POST';
             const headers = { 'Content-Type': 'application/json' };
-            const body = JSON.stringify({ play });
+            const body = JSON.stringify({ cards });
             const result = await fetch(url, { method, headers, body });
         });
 
@@ -163,27 +162,26 @@ class Game {
         $(`#my .load`).textContent = this.cards.length;
     }
 
-    async onPlay({ seat, load, play }) {
-        console.log('play', seat, load, play);
+    async onPlay({ seat, load, cards, pass }) {
+        console.log('play', seat, load, cards);
         const relative = this.seatToRelative[seat];
         $(`#${relative} .action-timer .progress`).style.removeProperty('animation');
         $(`#${relative} .load`).textContent = load;
         $(`#${relative} .turn`).textContent = '';
         $(`#${relative} .control`).textContent = '';
         if (relative === 'my') {
-            this.cards = this.cards.filter(card => !play.cards.includes(card));
+            this.cards = this.cards.filter(card => !cards.includes(card));
             $(`#my .cards`).textContent = this.cards;
             $(`#my .load`).textContent = this.cards.length;
         }
-        if (play.kind === 'pass') {
+        if (pass) {
             $(`#${relative} .passed`).textContent = 'passed';
         } else {
-            $(`#table .cards`).textContent = play.cards;
+            $(`#table .cards`).textContent = cards;
         }
         if (load === 0) {
             $(`#${relative} .win`).textContent = 'win';
         }
-        // TODO: was the play a pass
     }
 
     async onTurn({ seat, timer, control }) {
@@ -194,17 +192,6 @@ class Game {
         $(`#${relative} .passed`).textContent = '';
         if (timer !== null) {
             $(`#${relative} .action-timer .progress`).style.animation = `${timer}ms linear 0s action-progress`;
-        }
-    }
-
-    async onPrompt({ options, timer, control }) {
-        console.log('prompt', options, timer);
-        this.options = options;
-        $(`#my .turn`).textContent = 'turn';
-        $(`#my .control`).textContent = control ? 'control' : '';
-        $(`#my .passed`).textContent = '';
-        if (timer !== null) {
-            $(`#$my .action-timer .progress`).style.animation = `${timer}ms linear 0s action-progress`;
         }
     }
 

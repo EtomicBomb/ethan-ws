@@ -1,3 +1,7 @@
+# resources: cards
+https://commons.wikimedia.org/wiki/File:Atlasnye_playing_cards_deck.svg
+
+
 # When you go to the website:
     - create a new game
     - choose action timer, and variants

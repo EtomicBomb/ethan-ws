@@ -1,10 +1,11 @@
-use super::{Play, all_plays, Card, Cards, PlayKind};
+use super::{Play, Card, Cards, PlayKind};
 use rand::{thread_rng};
 use std::iter::once;
 use rand::seq::SliceRandom;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::cmp::Ordering;
+use std::fmt;
 
 #[derive(Debug)]
 pub struct GameState {
@@ -41,77 +42,71 @@ impl Default for GameState {
 
 impl GameState {
     pub fn valid_plays(&self) -> Vec<Play> {
-        let pass = Play {
-            cards: Cards::default(),
-            kind: PlayKind::Pass,
-            ranking_card: None,
-        };
+        let pass = Play { cards: Cards::default(), kind: PlayKind::Pass };
         once(pass)
-            .chain(all_plays(self.my_hand()))
-            .filter(|&p| self.can_play(p).is_ok())
+            .chain(Play::all(self.my_hand()))
+            .filter(|&p| self.can_play(p.cards).is_ok())
             .collect()
     }
     
-    // TODO: infer
-//    pub fn can_play(&self, cards: Cards) -> Result<Play, GameError> {
-    pub fn can_play(&self, play: Play) -> Result<(), GameError> {
-        if !play.cards.is_subset(self.my_hand()) {
-            return Err(GameError::DontHaveCard);
+    pub fn can_play(&self, cards: Cards) -> Result<Play, PlayError> {
+        let play = Play::infer(cards).ok_or(PlayError::NonsenseCards)?;
+
+        if !cards.is_subset(self.my_hand()) {
+            return Err(PlayError::DontHaveCard);
         }
 
         if self.is_first_turn() {
-            if !play.cards.contains(Card::THREE_OF_CLUBS) {
-                return Err(GameError::IsntPlayingThreeOfClubs);
-            }
-        } else if self.has_control() {
-            // if we have control, we can pretty much do anything except passing
-            if play.kind == PlayKind::Pass {
-                return Err(GameError::MustPlayOnPass);
-            }
-        } else if play.kind != PlayKind::Pass {
-            // here, we have our standard conditions, where we are not passing, and we don't have control
-
-            // since we don't have control, we have to make sure they are making a valid play in the context
-            // of the cards that they are trying to play on.
-            let cards_down = self.cards_on_table.unwrap();
-
-            // this is the problem
-            if !play.same_kind(cards_down) {
-                return Err(GameError::WrongLength);
-            }
-
-            let order = play.kind.cmp(&cards_down.kind)
-                .then(play.ranking_card.unwrap().cmp(&cards_down.ranking_card.unwrap()));
-            if order != Ordering::Greater {
-                return Err(GameError::TooLow);
-            }
+            return if cards.contains(Card::THREE_OF_CLUBS) {
+                Ok(play)
+            } else {
+                Err(PlayError::IsntPlayingThreeOfClubs)
+            };
         } 
 
-        Ok(())
+        if self.has_control() {
+            return if play.is_pass() {
+                Err(PlayError::MustPlayOnControl)
+            } else {
+                Ok(play)
+            };
+        } 
+
+        let cards_down = self.cards_on_table.unwrap();
+
+        let order = match (play.kind, cards_down.kind) {
+            (PlayKind::Pass, _) => Ordering::Greater,
+            (PlayKind::Single(this), PlayKind::Single(other)) => this.cmp(&other),
+            (PlayKind::Pair(this), PlayKind::Pair(other)) => this.cmp(&other),
+            (PlayKind::Poker(this), PlayKind::Poker(other)) => this.cmp(&other),
+            _ => return Err(PlayError::WrongLength),
+        };
+
+        if order != Ordering::Greater {
+            return Err(PlayError::TooLow);
+        }
+
+        Ok(play)
     }
     
-    // TODO: infer
-//    pub fn play(&mut self, cards: Cards) -> Result<Play, GameError> {
-    pub fn play(&mut self, play: Play) -> Result<(), GameError> {
-        // assumes that play is_legal
-        self.can_play(play)?;
+    pub fn play(&mut self, cards: Cards) -> Result<Play, PlayError> {
+        let play = self.can_play(cards)?;
 
-        self.hands
-            .get_mut(&self.current_player).unwrap()
-            .remove_all(play.cards);
+        let current_hand = self.hands.get_mut(&self.current_player).unwrap();
+        *current_hand = current_hand.remove_all(cards);
 
         if self.hands[&self.current_player].is_empty() {
             self.winning_player = Some(self.current_player);
         }
 
-        if play.kind != PlayKind::Pass {
+        if !play.is_pass() {
             self.last_player_to_not_pass = self.current_player;
             self.cards_on_table = Some(play); 
         }
 
         self.current_player = self.current_player.next();
 
-        Ok(())
+        Ok(play)
     }
 
     pub fn has_control(&self) -> bool {
@@ -138,12 +133,26 @@ impl GameState {
 }
 
 #[derive(Debug)]
-pub enum GameError {
+pub enum PlayError {
+    NonsenseCards,
     DontHaveCard,
     IsntPlayingThreeOfClubs,
     TooLow,
     WrongLength,
-    MustPlayOnPass,
+    MustPlayOnControl,
+}
+
+impl fmt::Display for PlayError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlayError::NonsenseCards => write!(f, "nonsense cards"),
+            PlayError::DontHaveCard => write!(f, "don't have card to play"),
+            PlayError::IsntPlayingThreeOfClubs => write!(f, "must play three of clubs"),
+            PlayError::TooLow => write!(f, "play not high enough"),
+            PlayError::WrongLength => write!(f, "wrong length"),
+            PlayError::MustPlayOnControl => write!(f, "must play on control"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]

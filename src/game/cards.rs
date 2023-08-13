@@ -17,31 +17,51 @@ impl Cards {
     pub const DIAMONDS: Self = Self { bits: 0x8888888888888 }; 
     pub const ENTIRE_DECK: Cards = Self { bits: 0xfffffffffffff };
     pub const SUITS: [Self; 4] = [Self::CLUBS, Self::SPADES, Self::HEARTS, Self::DIAMONDS];
+//    pub const THREES: Self = Self::with_rank(0); 
+//    pub const FOURS: Self = Self::with_rank(1); 
+//    pub const FIVES: Self = Self::with_rank(2); 
+//    pub const SIXES: Self = Self::with_rank(3); 
+//    pub const SEVENS: Self = Self::with_rank(4); 
+//    pub const EIGHTS: Self = Self::with_rank(5); 
+//    pub const NINES: Self = Self::with_rank(6); 
+//    pub const TENS: Self = Self::with_rank(7); 
+//    pub const JACKS: Self = Self::with_rank(8); 
+//    pub const QUEENS: Self = Self::with_rank(9); 
+//    pub const KINGS: Self = Self::with_rank(10); 
+//    pub const ACES: Self = Self::with_rank(11); 
+//    pub const TWOS: Self = Self::with_rank(12); 
     
     pub const fn single(card: Card) -> Self {
         Self { bits: 1 << card.index }
     }
 
-    pub fn copy_rank(card: Card) -> Self {
-        let rank = card.rank();
+    pub const fn with_rank(rank: u8) -> Self {
         let bits = 0xf << (4 * rank);
         Cards { bits }
     }
 
-    pub fn insert(&mut self, card: Card) {
+    pub fn copy_rank(card: Card) -> Self {
+        Self::with_rank(card.rank())
+    }
+
+    #[must_use]
+    pub fn insert(self, card: Card) -> Self {
         self.insert_all(Self::single(card))
     }
 
-    pub fn insert_all(&mut self, other: Self) {
-        self.bits |= other.bits;
+    #[must_use]
+    pub fn insert_all(self, other: Self) -> Self {
+        Self { bits: self.bits | other.bits }
     }
 
-    pub fn remove(&mut self, card: Card) {
-        self.remove_all(Self::single(card));
+    #[must_use]
+    pub fn remove(self, card: Card) -> Self {
+        self.remove_all(Self::single(card))
     }
 
-    pub fn remove_all(&mut self, other: Self) {
-        self.bits &= !other.bits;
+    #[must_use]
+    pub fn remove_all(self, other: Self) -> Self {
+        Self { bits: self.bits & !other.bits }
     }
 
     pub fn contains(self, card: Card) -> bool {
@@ -61,8 +81,7 @@ impl Cards {
     }
 
     pub fn intersection(self, other: Self) -> Self {
-        let bits = self.bits & other.bits;
-        Cards { bits }
+        Cards { bits: self.bits & other.bits }
     }
 
     pub fn len(self) -> usize {
@@ -70,8 +89,7 @@ impl Cards {
     }
 
     pub fn all_same_rank(self) -> bool {
-        // TODO: why not self.bits.trailing_zeros() & !3
-        let after = (self.bits.trailing_zeros() | 3) - 3; // round down to multiple of 4
+        let after = self.bits.trailing_zeros() & !3; // round down to multiple of 4
         let rank_cluster = self.bits >> after; // move our rank cluster to the lower 4 bits
         rank_cluster < 16 // if they're all the same rank, then this should be the only rank cluster
     }
@@ -80,22 +98,16 @@ impl Cards {
         Self::SUITS.into_iter().any(|s| self.is_subset(s))
     }
 
-    pub fn max_card(self) -> Option<Card> {
-        match self.bits.leading_zeros() {
-            64 => None,
-            n => Some(Card { index: 63 - n as u8 }),
-        }
+    pub fn min(self) -> Option<Card> {
+        if self.is_empty() { return None }
+        let n = self.bits.trailing_zeros();
+        Some(Card { index: n as u8 })
     }
 
-    pub fn min_card(self) -> Option<Card> {
-        match self.bits.trailing_zeros() {
-            64 => None,
-            n => Some(Card { index: n as u8 })
-        }
-    }
-
-    pub fn iter(self) -> CardsIter {
-        CardsIter { cards: self }
+    pub fn max(self) -> Option<Card> {
+        if self.is_empty() { return None }
+        let n = self.bits.leading_zeros();
+        Some(Card { index: 63 - n as u8 })
     }
 }
 
@@ -108,7 +120,7 @@ impl fmt::Debug for Cards {
 impl Extend<Card> for Cards {
     fn extend<I: IntoIterator<Item=Card>>(&mut self, iter: I) {
         for card in iter.into_iter() {
-            self.insert(card);
+            *self = self.insert(card);
         }
     }
 }
@@ -125,7 +137,7 @@ impl IntoIterator for Cards {
     type Item = Card;
     type IntoIter = CardsIter;
     fn into_iter(self) -> Self::IntoIter {
-        self.iter()
+        CardsIter { cards: self }
     }
 }
 
@@ -149,7 +161,7 @@ impl<'de> Deserialize<'de> for Cards {
             {
                 let mut cards = Cards::default();
                 while let Some(card) = seq.next_element()? {
-                    cards.insert(card);
+                    cards = cards.insert(card);
                 }
                 Ok(cards)
             }
@@ -165,7 +177,7 @@ impl Serialize for Cards {
         S: Serializer,
     {
         let mut seq = serializer.serialize_seq(Some(self.len()))?;
-        for card in self.iter() {
+        for card in self.into_iter() {
             seq.serialize_element(&card)?;
         }
         seq.end()
@@ -179,8 +191,8 @@ pub struct CardsIter {
 impl Iterator for CardsIter {
     type Item = Card;
     fn next(&mut self) -> Option<Self::Item> {
-        let card = self.cards.min_card()?;
-        self.cards.remove(card);
+        let card = self.cards.min()?;
+        self.cards = self.cards.remove(card);
         Some(card)
     }
 }
@@ -250,16 +262,13 @@ mod tests {
     #[test]
     fn cards_set_len() {
         assert_eq!(Cards::default().len(), 0);
-        assert_eq!(Cards::default().iter().count(), 0);
         assert_eq!(Cards::default().into_iter().count(), 0);
 
         assert_eq!(Cards::ENTIRE_DECK.len(), 52);
-        assert_eq!(Cards::ENTIRE_DECK.iter().count(), 52);
         assert_eq!(Cards::ENTIRE_DECK.into_iter().count(), 52);
 
         for suit in Cards::SUITS {
             assert_eq!(suit.len(), 13);
-            assert_eq!(suit.iter().count(), 13);
             assert_eq!(suit.into_iter().count(), 13);
         }
 

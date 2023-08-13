@@ -1,11 +1,10 @@
 use rand::{thread_rng};
 use rand::seq::SliceRandom;
 
-use super::{Play, GameState, Cards, GameError};
+use super::{Play, GameState, Cards, PlayError};
 
 pub fn choose_play(game: &GameState) -> Play {
     let game = SafeGameInterface { game };
-
     *game.valid_plays().choose(&mut thread_rng()).unwrap()
 }
 
@@ -27,7 +26,7 @@ impl<'a> SafeGameInterface<'a> {
         self.game.valid_plays()
     }
     
-    fn can_play(&self, play: Play) -> Result<(), GameError> {
-        self.game.can_play(play)
+    fn can_play(&self, cards: Cards) -> Result<Play, PlayError> {
+        self.game.can_play(cards)
     }
 }

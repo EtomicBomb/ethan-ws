@@ -58,10 +58,10 @@ async fn main() {
 //    .await
 //    .unwrap();
 
+    let app = app();
+
     let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
     eprintln!("listening on {}", addr);
-
-    let app = app();
 
 //    axum_server::bind_rustls(addr, config) // TODO: revert on deploy
     axum_server::bind(addr)
@@ -178,15 +178,15 @@ async fn start_game(
 
 #[derive(Deserialize)]
 struct PlayRequest {
-    play: Play,
+    cards: Cards,
 }
 
 async fn play(
     ExtractGame { game, seat, .. }: ExtractGame,
-    Json(PlayRequest { play }): Json<PlayRequest>,
+    Json(PlayRequest { cards }): Json<PlayRequest>,
 ) -> Result<impl IntoResponse, ()> {
     let mut game = game.lock().await;
-    game.human_play(seat, play).await
+    game.human_play(seat, cards).await
 }
 
 
@@ -309,26 +309,25 @@ impl Game {
     async fn auto_play(&mut self) -> Result<(), ()> {
         let Era::Active { game_state, .. } = &mut self.era else { return Err(()) };
         let current_player = game_state.current_player();
-        let play = choose_play(game_state);
-        self.play(current_player, play).await
+        let cards = choose_play(game_state).cards;
+        self.play(current_player, cards).await
     }
 
-    async fn human_play(&mut self, seat: Seat, play: Play) -> Result<(), ()> {
+    async fn human_play(&mut self, seat: Seat, cards: Cards) -> Result<(), ()> {
         let Era::Active { game_state, .. } = &mut self.era else { return Err(()) };
         let current_player = game_state.current_player();
         if seat != current_player { return Err(()) }
-        self.play(seat, play).await
+        self.play(seat, cards).await
     }
 
-    async fn play(&mut self, seat: Seat, play: Play) -> Result<(), ()> {
+    async fn play(&mut self, seat: Seat, cards: Cards) -> Result<(), ()> {
         let Era::Active { game_state, .. } = &mut self.era else { return Err(()) };
 
-        game_state.play(play).map_err(|_| ())?;
-
+        let play = game_state.play(cards).map_err(|_| ())?;
+        let pass = play.is_pass();
         let load = game_state.hand(seat).len();
-
         for other in Seat::ALL {
-            let _ = self.respond(other, &Respond::Play { seat, load, play }).await;
+            let _ = self.respond(other, &Respond::Play { seat, load, pass, cards }).await;
         }
 
         let win = load == 0;
@@ -365,16 +364,8 @@ impl Game {
         let deadline = timer.map(|timer| Instant::now() + timer);
         *old_deadline = deadline;
 
-        let options = game_state.valid_plays();
         let control = game_state.has_control();
-        let _ = self.respond(current_player, &Respond::Prompt { 
-            options, 
-            control,
-            timer: timer.map(DurationMillis::from), 
-        }).await;
-
         for other in Seat::ALL {
-            if current_player == other { continue }
             let _ = self.respond(other, &Respond::Turn { 
                 seat: current_player, 
                 control,
@@ -502,15 +493,11 @@ enum Respond {
     Play {
         seat: Seat,
         load: usize,
-        play: Play,
+        pass: bool,
+        cards: Cards,
     },
     Turn {
         seat: Seat,
-        control: bool,
-        timer: Option<DurationMillis>,
-    },
-    Prompt {
-        options: Vec<Play>,
         control: bool,
         timer: Option<DurationMillis>,
     },

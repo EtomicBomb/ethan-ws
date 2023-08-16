@@ -26,7 +26,7 @@ impl<'a> SafeGameInterface<'a> {
         self.game.valid_plays()
     }
 
-    fn can_play(&self, cards: Cards) -> Result<Play, PlayError> {
-        self.game.can_play(cards)
+    fn playable(&self, cards: Cards) -> Result<Play, PlayError> {
+        self.game.playable(cards)
     }
 }

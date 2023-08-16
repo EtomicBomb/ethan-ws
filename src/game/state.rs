@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
+use serde_with::SerializeDisplay;
 
 #[derive(Debug)]
 pub struct GameState {
@@ -45,11 +46,11 @@ impl GameState {
     pub fn valid_plays(&self) -> Vec<Play> {
         Play::all(self.my_hand())
             .into_iter()
-            .filter(|p| self.can_play(p.cards).is_ok())
+            .filter(|p| self.playable(p.cards).is_ok())
             .collect()
     }
 
-    pub fn can_play(&self, cards: Cards) -> Result<Play, PlayError> {
+    pub fn playable(&self, cards: Cards) -> Result<Play, PlayError> {
         let play = Play::infer(cards).ok_or(PlayError::NonsenseCards)?;
 
         if !cards.is_subset(self.my_hand()) {
@@ -90,7 +91,7 @@ impl GameState {
     }
 
     pub fn play(&mut self, cards: Cards) -> Result<Play, PlayError> {
-        let play = self.can_play(cards)?;
+        let play = self.playable(cards)?;
 
         let current_hand = self.hands.get_mut(&self.current_player).unwrap();
         *current_hand = current_hand.remove_all(cards);
@@ -134,7 +135,7 @@ impl GameState {
     }
 }
 
-#[derive(Debug)]
+#[derive(SerializeDisplay, Debug)]
 pub enum PlayError {
     NonsenseCards,
     DontHaveCard,

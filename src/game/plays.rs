@@ -1,7 +1,7 @@
 use super::{Card, Cards};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Play {
     pub cards: Cards,
     pub kind: PlayKind,
@@ -11,10 +11,6 @@ impl Play {
     pub fn infer(cards: Cards) -> Option<Self> {
         let kind = PlayKind::infer(cards)?;
         Some(Play { cards, kind })
-    }
-
-    pub fn is_pass(self) -> bool {
-        matches!(self.kind, PlayKind::Pass)
     }
 
     pub fn all(cards: Cards) -> Vec<Self> {
@@ -36,9 +32,13 @@ impl Play {
 
         plays
     }
+
+    pub fn is_pass(self) -> bool {
+        matches!(self.kind, PlayKind::Pass)
+    }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Hash)]
 pub enum PlayKind {
     Pass,
     Single(Card),
@@ -46,7 +46,7 @@ pub enum PlayKind {
     Poker(Poker),
 }
 
-#[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Hash, Deserialize, Serialize)]
+#[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Hash)]
 pub enum Poker {
     Straight(Card),
     Flush(Card),
@@ -57,41 +57,31 @@ pub enum Poker {
 
 impl PlayKind {
     pub fn infer(cards: Cards) -> Option<Self> {
-        if cards.len() == 0 {
+        if cards.is_empty() {
             return Some(PlayKind::Pass);
         }
 
-        {
-            let ranking_card = cards.max().unwrap();
-            if cards.len() == 1 {
-                return Some(PlayKind::Single(ranking_card));
+        let absolute_max = cards.max().unwrap();
+        match (cards.len(), cards.all_same_rank(), cards.all_same_suit(), is_straight(cards)) {
+            (1, _, _, _) => return Some(PlayKind::Single(absolute_max)),
+            (2, true, _, _) => return Some(PlayKind::Pair(absolute_max)),
+            (5, _, true, true) => {
+                return Some(PlayKind::Poker(Poker::StraightFlush(absolute_max)))
             }
-
-            if cards.len() == 2 && cards.all_same_rank() {
-                return Some(PlayKind::Pair(ranking_card));
-            }
-
-            match (cards.len(), is_straight(cards), cards.all_same_suit()) {
-                (5, true, true) => {
-                    return Some(PlayKind::Poker(Poker::StraightFlush(ranking_card)))
-                }
-                (5, true, false) => return Some(PlayKind::Poker(Poker::Straight(ranking_card))),
-                (5, false, true) => return Some(PlayKind::Poker(Poker::Flush(ranking_card))),
-                _ => {}
-            }
+            (5, _, true, _) => return Some(PlayKind::Poker(Poker::Flush(absolute_max))),
+            (5, _, _, true) => return Some(PlayKind::Poker(Poker::Straight(absolute_max))),
+            _ => {}
         }
 
-        {
-            let mut xs = [cards.min().unwrap(), cards.max().unwrap()]
-                .map(|x| Cards::copy_rank(x).intersection(cards));
-            xs.sort_by_key(|x| x.len());
-            let [a, b] = xs;
-            let ranking_card = b.max().unwrap();
-            match (a.len(), b.len()) {
-                (2, 3) => return Some(PlayKind::Poker(Poker::FullHouse(ranking_card))),
-                (1, 4) => return Some(PlayKind::Poker(Poker::Quadruple(ranking_card))),
-                _ => {}
-            }
+        let mut xs = [cards.min().unwrap(), cards.max().unwrap()]
+            .map(|x| Cards::copy_rank(x).intersection(cards));
+        xs.sort_by_key(|x| x.len());
+        let [a, b] = xs;
+        let ranking_card = b.max().unwrap();
+        match (a.len(), b.len()) {
+            (2, 3) => return Some(PlayKind::Poker(Poker::FullHouse(ranking_card))),
+            (1, 4) => return Some(PlayKind::Poker(Poker::Quadruple(ranking_card))),
+            _ => {}
         }
 
         None
@@ -104,7 +94,7 @@ struct RankBlocks {
 }
 
 impl RankBlocks {
-    fn new(cards: Cards) -> RankBlocks {
+    fn new(cards: Cards) -> Self {
         let mut blocks: [Block; 13] = Default::default();
 
         for card in cards {

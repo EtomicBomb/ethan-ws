@@ -1,12 +1,15 @@
 #![allow(dead_code)]
-#![feature(async_fn_in_trait)]
 #![allow(unused_imports)]
 
+use async_trait::async_trait;
+use axum_core::response::{IntoResponseParts, ResponseParts};
 use axum::{
+    TypedHeader,
     debug_handler,
     extract::{FromRequestParts, Query, State},
     response::{
         sse::{self, KeepAlive, Sse},
+        Response,
         IntoResponse,
     },
     routing::{get, post, put},
@@ -15,7 +18,7 @@ use axum::{
 //use axum_server::tls_rustls::RustlsConfig;
 use futures::future::{BoxFuture, LocalBoxFuture};
 use http::{
-    header::{self, HeaderValue},
+    header::{HeaderValue},
     request::Parts,
     status::StatusCode,
     HeaderMap,
@@ -26,6 +29,7 @@ use std::{
     collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc, sync::Weak,
     time::Duration,
     mem,
+    fmt,
 };
 use tokio::{
     sync::mpsc::{self, UnboundedSender},
@@ -40,16 +44,24 @@ use tower_http::{
 };
 use uuid::Uuid;
 use serde_with::serde_as;
+use base64::{Engine as _, engine::{general_purpose}};
+use headers::{HeaderMapExt, Authorization, authorization::Bearer};
+
 
 mod game;
+mod json_stream;
 use crate::game::{choose_play, Cards, GameState, Seat, PlayError};
 
+use crate::json_stream::JsonStream;
+
+mod text_stream;
+use crate::text_stream::TextStream;
 const MAX_ACTION_TIMER: Duration = Duration::from_secs(1000);
 const BOT_ACTION_TIMER: Duration = Duration::from_secs(1);
 
 #[tokio::main]
 async fn main() {
-    //    let config = RustlsConfig::from_pem_file( // TODO: revert on deploy
+    //    let config = RustlsConfig::from_pem_file(
     //        "secret/cert.pem",
     //        "secret/key.pem",
     //    )
@@ -61,7 +73,7 @@ async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
     eprintln!("listening on {}", addr);
 
-    //    axum_server::bind_rustls(addr, config) // TODO: revert on deploy
+    //    axum_server::bind_rustls(addr, config)
     axum_server::bind(addr)
         .serve(app.into_make_service())
         .await
@@ -69,31 +81,42 @@ async fn main() {
 }
 
 fn app() -> Router {
+    let api = Router::new()
+        .route("/test", get(test))
+        .route("/join", post(join))
+        .route("/username", put(username))
+        .route("/timer", put(timer))
+        .route("/start", post(start))
+        .route("/play", post(play))
+        .route("/playable", post(playable))
+        .with_state(ApiState::new());
+
     let serve_dir = ServeDir::new("www")
         .not_found_service(ServeFile::new("www/not_found.html"))
         .append_index_html_on_directories(true);
 
     Router::new()
-        .nest("/api", api())
+        .nest("/api", api)
         .nest_service("/", serve_dir)
         .layer(SetResponseHeaderLayer::overriding(
             // TODO: revert debug
-            header::CACHE_CONTROL,
+            http::header::CACHE_CONTROL,
             HeaderValue::from_static("no-store, must-revalidate"),
         ))
 }
 
-fn api() -> Router {
-    Router::new()
-        .route("/test", get(|| async { "test endpoint!" }))
-        .route("/lobby/join", post(lobby_join))
-        .route("/lobby/subscribe", get(lobby_subscribe))
-        .route("/lobby/username", put(lobby_username))
-        .route("/lobby/timer", put(lobby_timer))
-        .route("/lobby/start", post(lobby_start))
-        .route("/active/play", post(active_play))
-        .route("/active/playable", post(active_play))
-        .with_state(ApiState::new())
+#[debug_handler(state=Arc<Mutex<ApiState>>)]
+async fn test() -> impl IntoResponse {
+    use tokio::time::sleep;
+    let (tx, stream) = mpsc::unbounded_channel();
+    task::spawn(async move {
+        for i in 0.. {
+            let Ok(_) = tx.send(i) else { break };
+            sleep(Duration::from_millis(1000)).await;
+        }
+    });
+    let stream = UnboundedReceiverStream::new(stream);
+    JsonStream { stream }
 }
 
 #[derive(Deserialize)]
@@ -103,35 +126,25 @@ struct JoinQuery {
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn lobby_join(
+async fn join(
     State(state): State<Arc<Mutex<ApiState>>>,
     Query(JoinQuery { host_id }): Query<JoinQuery>,
-) -> Result<impl IntoResponse, ()> {
-    let auth = state.lock().await.lobby_join(host_id).await?;
-    Ok(Json(auth))
-}
+) -> Result<impl IntoResponse> {
+    dbg!(host_id);
+    let (tx, stream) = mpsc::unbounded_channel();
+    let disconnected = tx.clone();
+    let stream = UnboundedReceiverStream::new(stream);
+    let stream = JsonStream { stream };
 
-#[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn lobby_subscribe(
-    State(state): State<Arc<Mutex<ApiState>>>,
-    Query(auth): Query<Auth>,
-) -> Result<impl IntoResponse, ()> {
-
-    let (tx, rx) = mpsc::unbounded_channel();
-    let tx_closed = tx.clone();
-
-    let (phase, seat) = state.lock().await.get_lobby(auth).await?;
-    phase.lock().await.subscribe(seat, tx).await;
+    let auth = state.lock().await.join(host_id, tx).await?;
 
     task::spawn(async move {
-        tx_closed.closed().await;
+        disconnected.closed().await;
         let mut state = state.lock().await;
         state.disconnect(auth.user_id).await;
     });
 
-    let rx = UnboundedReceiverStream::new(rx);
-    let sse = Sse::new(rx).keep_alive(KeepAlive::default());
-    Ok(sse)
+    Ok((auth, stream))
 }
 
 #[derive(Deserialize)]
@@ -140,14 +153,14 @@ struct UsernameRequest {
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn lobby_username(
+async fn username(
     State(state): State<Arc<Mutex<ApiState>>>,
-    Query(auth): Query<Auth>,
+    auth: Auth,
     Json(UsernameRequest { username }): Json<UsernameRequest>,
-) -> Result<impl IntoResponse, ()> {
-    let (phase, seat) = state.lock().await.get_lobby(auth).await?;
-    phase.lock().await.username(seat, username).await;
-    Ok(())
+) -> Result<impl IntoResponse> {
+    let (phase, seat) = state.lock().await.get_seat(auth).await?;
+    let mut phase = phase.lock().await;
+    phase.username(seat, username).await
 }
 
 #[derive(Deserialize)]
@@ -158,21 +171,22 @@ struct ActionTimerRequest {
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn lobby_timer(
+async fn timer(
     State(state): State<Arc<Mutex<ApiState>>>,
-    Query(auth): Query<Auth>,
+    auth: Auth,
     Json(ActionTimerRequest { millis }): Json<ActionTimerRequest>,
-) -> Result<impl IntoResponse, ()> {
-    let (phase, seat) = state.lock().await.get_lobby(auth).await?;
+) -> Result<impl IntoResponse> {
+    let (phase, seat) = state.lock().await.get_seat(auth).await?;
     phase.lock().await.timer(seat, millis).await?;
     Ok(())
 }
 
-async fn lobby_start(
+#[debug_handler(state=Arc<Mutex<ApiState>>)]
+async fn start(
     State(state): State<Arc<Mutex<ApiState>>>,
-    Query(auth): Query<Auth>,
-) -> Result<impl IntoResponse, ()> {
-    let (phase, seat) = state.lock().await.get_lobby(auth).await?;
+    auth: Auth,
+) -> Result<impl IntoResponse> {
+    let (phase, seat) = state.lock().await.get_seat(auth).await?;
     let mut phase = phase.lock().await;
     phase.start(seat).await
 }
@@ -182,205 +196,88 @@ struct PlayRequest {
     cards: Cards,
 }
 
-#[derive(Serialize)]
-struct PlayableResponse {
-    playable: Option<PlayError>,
-}
-
-async fn active_playable(
+#[debug_handler(state=Arc<Mutex<ApiState>>)]
+async fn playable(
     State(state): State<Arc<Mutex<ApiState>>>,
-    Query(auth): Query<Auth>,
+    auth: Auth,
     Json(PlayRequest { cards }): Json<PlayRequest>,
-) -> Result<impl IntoResponse, ()> {
-    let (phase, seat) = state.lock().await.get_active(auth).await?;
+) -> Result<impl IntoResponse> {
+    let (phase, seat) = state.lock().await.get_seat(auth).await?;
     let phase = phase.lock().await;
-    let playable = phase.playable(seat, cards).await?;
-    Ok(Json(PlayableResponse { playable }))
+    let phase = phase.playable(seat, cards);
+    phase.await
 }
 
-async fn active_play(
+#[debug_handler(state=Arc<Mutex<ApiState>>)]
+async fn play(
     State(state): State<Arc<Mutex<ApiState>>>,
-    Query(auth): Query<Auth>,
+    auth: Auth,
     Json(PlayRequest { cards }): Json<PlayRequest>,
-) -> Result<impl IntoResponse, ()> {
-    let (phase, seat) = state.lock().await.get_active(auth).await?;
+) -> Result<impl IntoResponse> {
+    let (phase, seat) = state.lock().await.get_seat(auth).await?;
     let mut phase = phase.lock().await;
     phase.human_play(seat, cards).await
 }
 
 #[derive(Default)]
 struct ApiState {
-    lobbies: HashMap<UserId, Arc<Mutex<Lobby>>>,
-    actives: HashMap<UserId, Arc<Mutex<Active>>>,
-    wins: HashMap<UserId, Arc<Mutex<Win>>>,
+    phases: HashMap<UserId, Arc<Mutex<dyn Phase>>>,
     this: Weak<Mutex<ApiState>>,
-}
-
-trait Phase {
-    async fn get_seat(&self, auth: Auth) -> Option<Seat>;
-    async fn join(&mut self) -> Result<Auth, ()>;
-    async fn subscribe(&mut self, seat: Seat, tx: UserTx);
-    async fn timer(&mut self, seat: Seat, timer: Option<Duration>) -> Result<(), ()>;
-    async fn username(&mut self, seat: Seat, username: String);
-    async fn start(&mut self, seat: Seat) -> Result<(), ()>;
-    async fn playable(&self, seat: Seat, cards: Cards) -> Result<Option<PlayError>, ()>;
-    async fn play(&mut self, seat: Seat, cards: Cards) -> Result<(), ()>;
-    async fn disconnect(&mut self, user_id: UserId) -> Result<(), ()>;
-}
-
-trait PhaseDyn {
-    fn get_seat(&self, auth: Auth) -> LocalBoxFuture<'_, Option<Seat>>;
-    fn join(&mut self) -> LocalBoxFuture<'_, Result<Auth, ()>>;
-    fn subscribe(&mut self, seat: Seat, tx: UserTx) -> LocalBoxFuture<'_, ()>;
-    fn timer(&mut self, seat: Seat, timer: Option<Duration>) -> LocalBoxFuture<'_, Result<(), ()>>;
-    fn username(&mut self, seat: Seat, username: String) -> LocalBoxFuture<'_, ()>;
-    fn start(&mut self, seat: Seat) -> LocalBoxFuture<'_, Result<(), ()>>;
-    fn playable(&self, seat: Seat, cards: Cards) -> LocalBoxFuture<'_, Result<Option<PlayError>, ()>>;
-    fn play(&mut self, seat: Seat, cards: Cards) -> LocalBoxFuture<'_, Result<(), ()>>;
-    fn disconnect(&mut self, user_id: UserId) -> LocalBoxFuture<'_, Result<(), ()>>;
-}
-
-impl<T: Phase> PhaseDyn for T {
-    fn get_seat(&self, auth: Auth) -> LocalBoxFuture<'_, Option<Seat>> {
-        Box::pin(<Self as Phase>::get_seat(self, auth))
-	}
-    fn join(&mut self) -> LocalBoxFuture<'_, Result<Auth, ()>> {
-        Box::pin(<Self as Phase>::join(self))
-	}
-    fn subscribe(&mut self, seat: Seat, tx: UserTx) -> LocalBoxFuture<'_, ()> {
-        Box::pin(<Self as Phase>::subscribe(self, seat, tx))
-	}
-    fn timer(&mut self, seat: Seat, timer: Option<Duration>) -> LocalBoxFuture<'_, Result<(), ()>> {
-        Box::pin(<Self as Phase>::timer(self, seat, timer))
-	}
-    fn username(&mut self, seat: Seat, username: String) -> LocalBoxFuture<'_, ()> {
-        Box::pin(<Self as Phase>::username(self, seat, username))
-	}
-    fn start(&mut self, seat: Seat) -> LocalBoxFuture<'_, Result<(), ()>> {
-        Box::pin(<Self as Phase>::start(self, seat))
-	}
-    fn playable(&self, seat: Seat, cards: Cards) -> LocalBoxFuture<'_, Result<Option<PlayError>, ()>> {
-        Box::pin(<Self as Phase>::playable(self, seat, cards))
-	}
-    fn play(&mut self, seat: Seat, cards: Cards) -> LocalBoxFuture<'_, Result<(), ()>> {
-        Box::pin(<Self as Phase>::play(self, seat, cards))
-	}
-    fn disconnect(&mut self, user_id: UserId) -> LocalBoxFuture<'_, Result<(), ()>> {
-        Box::pin(<Self as Phase>::disconnect(self, user_id))
-	}
-}
-
-fn assert() {
-    let a: Arc<Mutex<dyn PhaseDyn>> = todo!();
-}
-
-// TODO: consider Box<dyn Phase>
-enum Session {
-    Lobby(Arc<Mutex<Lobby>>),
-    Active(Arc<Mutex<Active>>),
-    Win(Arc<Mutex<Win>>),
-}
-
-impl Session {
-    async fn get_lobby(&self) -> Option<Arc<Mutex<Lobby>>> {
-        match self {
-            Session::Lobby(phase) => Some(Arc::clone(phase)),
-            _ => None,
-        }
-    }
-
-    async fn get_active(&self) -> Option<Arc<Mutex<Active>>> {
-        match self {
-            Session::Active(phase) => Some(Arc::clone(phase)),
-            _ => None,
-        }
-    }
-
-    async fn disconnect(&mut self, user_id: UserId) {
-        match self {
-            Session::Lobby(phase) => {
-                let mut phase = phase.lock().await;
-                let _ = phase.disconnect(user_id).await;
-            },
-            Session::Active(phase) => {
-                let mut phase = phase.lock().await;
-                let _ = phase.disconnect(user_id).await;
-            },
-            Session::Win(phase) => {
-                let mut phase = phase.lock().await;
-                let _ = phase.disconnect(user_id).await;
-            },
-        }
-    }
 }
 
 impl ApiState {
     fn new() -> Arc<Mutex<Self>> {
         Arc::new_cyclic(|this| {
             Mutex::new(Self {
-                lobbies: HashMap::default(),
-                actives: HashMap::default(),
-                wins: HashMap::default(),
+                phases: HashMap::default(),
                 this: Weak::clone(this),
             })
         })
     }
 
-    async fn lobby_join(&mut self, host_id: Option<UserId>) -> Result<Auth, ()> {
+    async fn join(&mut self, host_id: Option<UserId>, tx: UnboundedSender<Respond>) -> Result<Auth> {
         let phase = match host_id {
-            Some(host_id) => Arc::clone(self.lobbies.get(&host_id).ok_or(())?),
-            None => Arc::new(Mutex::new(Lobby::new(Weak::clone(&self.this)))),
+            Some(host_id) => Arc::clone(self.phases.get(&host_id).ok_or(Error::NoSession)?),
+            None => Lobby::new(Weak::clone(&self.this)),
         };
-        let auth = phase.lock().await.join().await?;
-        self.lobbies.insert(auth.user_id, phase);
+        let auth = phase.lock().await.join(tx).await?;
+        self.phases.insert(auth.user_id, phase);
         Ok(auth)
     }
 
-    async fn get_lobby(&self, auth: Auth) -> Result<(Arc<Mutex<Lobby>>, Seat), ()> {
-        let phase = self.lobbies.get(&auth.user_id).ok_or(())?;
-        let seat = phase.lock().await.get_seat(auth).ok_or(())?;
-        Ok((Arc::clone(phase), seat))
-    }
-
-    async fn get_active(&self, auth: Auth) -> Result<(Arc<Mutex<Active>>, Seat), ()> {
-        let phase = self.actives.get(&auth.user_id).ok_or(())?;
-        let seat = phase.lock().await.get_seat(auth).ok_or(())?;
+    async fn get_seat(&self, auth: Auth) -> Result<(Arc<Mutex<dyn Phase>>, Seat)> {
+        let phase = self.phases.get(&auth.user_id).ok_or(Error::NoSession)?;
+        let seat = phase.lock().await;
+        let seat = seat.get_seat(auth);
+        let seat = seat.await?;
         Ok((Arc::clone(phase), seat))
     }
 
     async fn disconnect(&mut self, user_id: UserId) {
         // there should be only one thingn in these maps
-        if let Some(phase) = self.lobbies.remove(&user_id) {
-            let mut phase = phase.lock().await;
-            let _ = phase.disconnect(user_id).await;
-        }
-        if let Some(phase) = self.actives.remove(&user_id) {
-            let mut phase = phase.lock().await;
-            let _ = phase.disconnect(user_id).await;
-        }
-        if let Some(phase) = self.wins.remove(&user_id) {
+        if let Some(phase) = self.phases.remove(&user_id) {
             let mut phase = phase.lock().await;
             let _ = phase.disconnect(user_id).await;
         }
     }
 
-    fn transition_start(&mut self, user_ids: Vec<UserId>, phase: Arc<Mutex<Active>>) {
-        for user_id in user_ids.iter() {
-            self.lobbies.remove(user_id);
-        }
+    fn transition(&mut self, user_ids: Vec<UserId>, new_phase: Arc<Mutex<dyn Phase>>) {
         for &user_id in user_ids.iter() {
-            self.actives.insert(user_id, Arc::clone(&phase));
+            self.phases.insert(user_id, Arc::clone(&new_phase));
         }
     }
+}
 
-    fn transition_win(&mut self, user_ids: Vec<UserId>, phase: Arc<Mutex<Win>>) {
-        for user_id in user_ids.iter() {
-            self.actives.remove(user_id);
-        }
-        for &user_id in user_ids.iter() {
-            self.wins.insert(user_id, Arc::clone(&phase));
-        }
-    }
+#[async_trait]
+trait Phase: Send {
+    async fn get_seat(&self, auth: Auth) -> Result<Seat>;
+    async fn join(&mut self, tx: UnboundedSender<Respond>) -> Result<Auth>;
+    async fn timer(&mut self, seat: Seat, timer: Option<Duration>) -> Result<()>;
+    async fn username(&mut self, seat: Seat, username: String) -> Result<()>;
+    async fn start(&mut self, seat: Seat) -> Result<()>;
+    async fn playable(&self, seat: Seat, cards: Cards) -> Result<()>;
+    async fn human_play(&mut self, seat: Seat, cards: Cards) -> Result<()>;
+    async fn disconnect(&mut self, user_id: UserId) -> Result<()>;
 }
 
 struct Lobby {
@@ -393,87 +290,70 @@ struct Lobby {
 }
 
 impl Lobby {
-    fn new(api_state: Weak<Mutex<ApiState>>) -> Self {
-        let mut seats = Vec::from(Seat::ALL);
-        seats.shuffle(&mut thread_rng());
-        let timer = None;
-        let seats_left = 4;
-        let host = None;
-        let common = Common::new(api_state);
-        let usernames = HashMap::default();
-        Self { timer, usernames, seats, seats_left, host, common }
-    }
-
-    fn get_seat(&self, auth: Auth) -> Option<Seat> {
-        self.common.get_seat(auth)
+    fn new(api_state: Weak<Mutex<ApiState>>) -> Arc<Mutex<Self>> {
+        Arc::new_cyclic(|_this| {
+            let mut seats = Vec::from(Seat::ALL);
+            seats.shuffle(&mut thread_rng());
+            let timer = None;
+            let seats_left = 4;
+            let host = None;
+            let common = Common::new(api_state);
+            let usernames = HashMap::default();
+            Mutex::new(Self { timer, usernames, seats, seats_left, host, common })
+        })
     }
 
     fn is_host(&self, seat: Seat) -> bool {
         self.host == Some(seat)
     }
+}
 
-    async fn join(&mut self) -> Result<Auth, ()> {
-        self.seats_left = self.seats_left.checked_sub(1).ok_or(())?;
+#[async_trait]
+impl Phase for Lobby {
+    async fn get_seat(&self, auth: Auth) -> Result<Seat> {
+        self.common.get_seat(auth)
+	}
+
+    async fn join(&mut self, tx: UnboundedSender<Respond>) -> Result<Auth> {
+        self.seats_left = self.seats_left.checked_sub(1).ok_or(Error::NoSeatsLeft)?;
         let seat = self.seats[self.seats_left];
-
-        let auth = self.common.new_user(seat);
-
+        let auth = self.common.new_user(seat, tx);
         self.host.get_or_insert(seat);
 
-        // TODO: ensure that user has subscribed within a couple seconds
-        for other in Seat::ALL {
-            let _ = self.common.respond(other, &Respond::Connected { seat }).await;
-        }
-        Ok(auth)
-    }
-
-    async fn subscribe(&mut self, seat: Seat, tx: UserTx) {
-        self.common.subscribe(seat, tx);
-        let _ = self.common.respond(seat, &Respond::Welcome { seat }).await;
+        self.common.respond(seat, Respond::Welcome { seat }).await;
         if self.is_host(seat) {
-            let _ = self.common.respond(seat, &Respond::Host { }).await;
-        }
-        let humans = Vec::from_iter(self.common.human_seats());
-        for &other in humans.iter() {
-            let _ = self
-                .common
-                .respond(seat, &Respond::Connected { seat: other })
-                .await;
+            self.common.respond(seat, Respond::Host { }).await;
         }
         for other in Seat::ALL {
-            let Some(username) = self.usernames.get(&other) else { continue };
-            let _ = self
-                .common
-                .respond(
-                    seat,
-                    &Respond::Username {
-                        seat: other,
-                        username: username.clone(),
-                    },
-                )
-                .await;
-        }
-
-        // TODO: complete new subscription package with era details
-    }
-
-    async fn username(&mut self, seat: Seat, username: String) {
-        self.usernames.insert(seat, username.clone());
-        for other in Seat::ALL {
-            if seat == other {
-                continue;
+            if other != seat {
+                self.common.respond(other, Respond::Connected { seat }).await;
             }
-            let username = username.clone();
-            let _ = self
-                .common
-                .respond(other, &Respond::Username { seat, username })
-                .await;
+            if self.common.is_human(other) && other != seat {
+                self
+                    .common
+                    .respond(seat, Respond::Connected { seat: other })
+                    .await;
+            }
+            if let Some(username) = self.usernames.get(&other) {
+                self
+                    .common
+                    .respond(
+                        seat,
+                        Respond::Username {
+                            seat: other,
+                            username: username.clone(),
+                        },
+                    )
+                    .await;
+            }
         }
-    }
-
-    async fn timer(&mut self, seat: Seat, timer: Option<Duration>) -> Result<(), ()> {
+        
+        Ok(auth)
+	}
+    
+    async fn timer(&mut self, seat: Seat, timer: Option<Duration>) -> Result<()> {
         if !self.is_host(seat) {
-            return Err(());
+            return Err(Error::NotHost);
         }
         let too_long = timer.is_some_and(|timer| timer > MAX_ACTION_TIMER);
         self.timer = if too_long {
@@ -482,41 +362,66 @@ impl Lobby {
             timer
         };
         Ok(())
-    }
+	}
 
-    async fn disconnect(&mut self, user_id: UserId) -> Result<(), ()> {
-        let seat = self.common.disconnect(user_id)?;
+    async fn username(&mut self, seat: Seat, username: String) -> Result<()> {
+        self.usernames.insert(seat, username.clone());
         for other in Seat::ALL {
-            let _ = self.common.respond(other, &Respond::Disconnected { seat }).await;
-        }
-
-        self.seats_left += 1;
-        if self.is_host(seat) {
-            self.host = self.seats[self.seats_left..].last().cloned();
-            if let Some(new_host) = self.host {
-                let _ = self.common.respond(new_host, &Respond::Host { }).await;
+            if seat == other {
+                continue;
             }
+            let username = username.clone();
+            self
+                .common
+                .respond(other, Respond::Username { seat, username })
+                .await;
         }
-
-        
         Ok(())
-    }
+	}
 
-    async fn start(&mut self, seat: Seat) -> Result<(), ()> {
+    async fn start(&mut self, seat: Seat) -> Result<()> {
         if !self.is_host(seat) {
-            return Err(());
+            return Err(Error::NotHost);
         }
         let timer = self.timer;
         let api_state = self.common.api_state();
         let user_ids = Vec::from_iter(self.common.user_ids());
         let common = mem::take(&mut self.common);
         let active = Active::new(timer, common).await;
-        api_state.lock().await.transition_start(user_ids, active);
+        api_state.lock().await.transition(user_ids, active);
         Ok(())
-    }
+	}
+
+    async fn playable(&self, _seat: Seat, _cards: Cards) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn human_play(&mut self, _seat: Seat, _cards: Cards) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn disconnect(&mut self, user_id: UserId) -> Result<()> {
+        let seat = self.common.disconnect(user_id)?;
+        for other in Seat::ALL {
+            self.common.respond(other, Respond::Disconnected { seat }).await;
+        }
+
+        self.seats_left += 1;
+        dbg!(self.seats_left, &self.seats);
+        if self.is_host(seat) {
+            dbg!(seat);
+            self.host = self.seats.iter().rev().cloned()
+                .find(|&new_host| self.common.is_human(new_host));
+            dbg!(self.host);
+            if let Some(new_host) = self.host {
+            dbg!(new_host);
+                self.common.respond(new_host, Respond::Host { }).await;
+            }
+        }
+
+        Ok(())
+	}
 }
-
-
 
 struct Active {
     timer: Option<Duration>,
@@ -543,21 +448,9 @@ impl Active {
     async fn deal(&mut self) {
         let hands = Seat::ALL.map(|other| (other, self.game_state.hand(other)));
         for (other, cards) in hands {
-            let _ = self.common.respond(other, &Respond::Deal { cards }).await;
+            self.common.respond(other, Respond::Deal { cards }).await;
         }
         self.solicit().await;
-    }
-
-    fn get_seat(&self, auth: Auth) -> Option<Seat> {
-        self.common.get_seat(auth)
-    }
-
-    async fn playable(&self, seat: Seat, cards: Cards) -> Result<Option<PlayError>, ()> {
-        let current_player = self.game_state.current_player();
-        if seat != current_player {
-            return Err(());
-        }
-        Ok(self.game_state.playable(cards).err())
     }
 
     async fn auto_play(&mut self) {
@@ -566,25 +459,17 @@ impl Active {
         self.play(current_player, cards).await.expect("our bots should always choose valid plays");
     }
 
-    async fn human_play(&mut self, seat: Seat, cards: Cards) -> Result<(), ()> {
-        let current_player = self.game_state.current_player();
-        if seat != current_player {
-            return Err(());
-        }
-        self.play(seat, cards).await
-    }
-
-    async fn play(&mut self, seat: Seat, cards: Cards) -> Result<(), ()> {
-        let play = self.game_state.play(cards).map_err(|_| ())?;
+    async fn play(&mut self, seat: Seat, cards: Cards) -> Result<()> {
+        let play = self.game_state.play(cards)?;
         let pass = play.is_pass();
         let load = self.game_state.hand(seat).len();
         let win = load == 0;
         for other in Seat::ALL {
-            let _ = self
+            self
                 .common
                 .respond(
                     other,
-                    &Respond::Play {
+                    Respond::Play {
                         seat,
                         load,
                         pass,
@@ -615,11 +500,11 @@ impl Active {
 
         let control = self.game_state.has_control();
         for other in Seat::ALL {
-            let _ = self
+            self
                 .common
                 .respond(
                     other,
-                    &Respond::Turn {
+                    Respond::Turn {
                         seat: current_player,
                         control,
                         millis: timer,
@@ -635,29 +520,21 @@ impl Active {
     }
 
     // BoxFuture to break recursion
-    fn force_play(this: Weak<Mutex<Self>>) -> BoxFuture<'static, Result<(), ()>> {
+    fn force_play(this: Weak<Mutex<Self>>) -> BoxFuture<'static, ()> {
         Box::pin(async move {
-            let deadline = this.upgrade().ok_or(())?.lock().await.deadline.ok_or(())?;
+            let Some(deadline) = this.upgrade() else { return };
+            let Some(deadline) = deadline.lock().await.deadline else { return };
             sleep_until(deadline).await;
 
-            let this = this.upgrade().ok_or(())?;
+            let Some(this) = this.upgrade() else { return };
             let mut this = this.lock().await;
-            if Instant::now() < this.deadline.ok_or(())? {
-                return Err(());
+            let Some(deadline) = this.deadline else { return };
+            if Instant::now() < deadline {
+                return;
             }
             // TODO: can choose a worse bot here if we're forcing a human player
             this.auto_play().await;
-            Ok(())
         })
-    }
-
-    async fn disconnect(&mut self, user_id: UserId) -> Result<(), ()> {
-        let seat = self.common.disconnect(user_id)?;
-        for other in Seat::ALL {
-            let _ = self.common.respond(other, &Respond::Disconnected { seat }).await;
-        }
-        // TODO: what if current player whose turn it is disconnects
-        Ok(())
     }
 
     async fn win(&mut self) {
@@ -665,8 +542,58 @@ impl Active {
         let user_ids = Vec::from_iter(self.common.user_ids());
         let common = mem::take(&mut self.common);
         let phase = Win::new(common);
-        api_state.lock().await.transition_win(user_ids, phase);
+        api_state.lock().await.transition(user_ids, phase);
     }
+}
+
+#[async_trait]
+impl Phase for Active {
+    async fn get_seat(&self, auth: Auth) -> Result<Seat> {
+        self.common.get_seat(auth)
+	}
+
+    async fn join(&mut self, _tx: UnboundedSender<Respond>) -> Result<Auth> {
+        Err(Error::BadPhase)
+	}
+
+    async fn timer(&mut self, _seat: Seat, _timer: Option<Duration>) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn username(&mut self, _seat: Seat, _username: String) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn start(&mut self, _seat: Seat) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn playable(&self, seat: Seat, cards: Cards) -> Result<()> {
+        let current_player = self.game_state.current_player();
+        if seat != current_player {
+            return Err(Error::NotCurrent);
+        }
+        self.game_state.playable(cards)?;
+        Ok(())
+	}
+
+    async fn human_play(&mut self, seat: Seat, cards: Cards) -> Result<()> {
+        let current_player = self.game_state.current_player();
+        if seat != current_player {
+            return Err(Error::NotCurrent);
+        }
+        self.play(seat, cards).await?;
+        Ok(())
+    }
+
+    async fn disconnect(&mut self, user_id: UserId) -> Result<()> {
+        let seat = self.common.disconnect(user_id)?;
+        for other in Seat::ALL {
+            self.common.respond(other, Respond::Disconnected { seat }).await;
+        }
+        // TODO: what if current player whose turn it is disconnects
+        Ok(())
+	}
 
 }
 
@@ -680,25 +607,55 @@ impl Win {
             Mutex::new(Self { common })
         })
     }
+}
 
-    fn get_seat(&self, auth: Auth) -> Option<Seat> {
+#[async_trait]
+impl Phase for Win {
+    async fn get_seat(&self, auth: Auth) -> Result<Seat> {
         self.common.get_seat(auth)
+	}
+
+    async fn join(&mut self, _tx: UnboundedSender<Respond>) -> Result<Auth> {
+        Err(Error::BadPhase)
+	}
+
+    async fn timer(&mut self, _seat: Seat, _timer: Option<Duration>) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn username(&mut self, _seat: Seat, _username: String) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn start(&mut self, _seat: Seat) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn playable(&self, _seat: Seat, _cards: Cards) -> Result<()> {
+        Err(Error::BadPhase)
+	}
+
+    async fn human_play(&mut self, _seat: Seat, _cards: Cards) -> Result<()> {
+        Err(Error::BadPhase)
     }
 
-    async fn disconnect(&mut self, user_id: UserId) -> Result<(), ()> {
+    async fn disconnect(&mut self, user_id: UserId) -> Result<()> {
         let seat = self.common.disconnect(user_id)?;
         for other in Seat::ALL {
-            let _ = self.common.respond(other, &Respond::Disconnected { seat }).await;
+            self.common.respond(other, Respond::Disconnected { seat }).await;
         }
         Ok(())
-    }
+	}
+
 }
+
+
 
 #[derive(Default)]
 struct Common {
     users: HashMap<UserId, Seat>,
     secrets: HashMap<Seat, UserSecret>,
-    txs: HashMap<Seat, UserTx>,
+    txs: HashMap<Seat, UnboundedSender<Respond>>,
     api_state: Weak<Mutex<ApiState>>,
 }
 
@@ -728,47 +685,35 @@ impl Common {
         self.users.keys().cloned()
     }
 
-    fn new_user(&mut self, seat: Seat) -> Auth {
+    fn new_user(&mut self, seat: Seat, tx: UnboundedSender<Respond>) -> Auth {
         let user_id = UserId::random();
         let user_secret = UserSecret::random();
+        self.txs.insert(seat, tx);
         self.users.insert(user_id, seat);
         self.secrets.insert(seat, user_secret);
         Auth { user_id, user_secret }
     }
 
-    fn subscribe(&mut self, seat: Seat, tx: UserTx) {
-        self.txs.insert(seat, tx);
-    }
-
-    fn get_seat(&self, auth: Auth) -> Option<Seat> {
-        let seat = *self.users.get(&auth.user_id)?;
+    fn get_seat(&self, auth: Auth) -> Result<Seat> {
+        let seat = *self.users.get(&auth.user_id).ok_or(Error::Absent)?;
         if self.secrets[&seat] != auth.user_secret {
-            return None;
+            return Err(Error::BadAuthentication);
         }
-        Some(seat)
+        Ok(seat)
     }
 
-    fn disconnect(&mut self, user_id: UserId) -> Result<Seat, ()> {
-        let seat = self.users.remove(&user_id).ok_or(())?;
+    fn disconnect(&mut self, user_id: UserId) -> Result<Seat> {
+        let seat = self.users.remove(&user_id).ok_or(Error::Absent)?;
         self.txs.remove(&seat);
         self.secrets.remove(&seat);
         Ok(seat)
     }
 
-    async fn respond(&mut self, seat: Seat, response: &Respond) -> Result<(), ()> {
-        let tx = self.txs.get(&seat).ok_or(())?;
-        let response = serde_json::to_value(response).unwrap();
-        let response = sse::Event::default()
-            .json_data(&response["data"])
-            .unwrap()
-            .event(response["event"].as_str().unwrap());
-        let response = Ok::<_, Infallible>(response);
-        tx.send(response).map_err(|_| ())?;
-        Ok(())
+    async fn respond(&mut self, seat: Seat, response: Respond) {
+        let Some(tx) = self.txs.get(&seat) else { return };
+        let _ = tx.send(response);
     }
 }
-
-type UserTx = UnboundedSender<Result<sse::Event, Infallible>>;
 
 #[derive(Serialize)]
 #[serde(tag = "event", content = "data")]
@@ -813,6 +758,34 @@ struct Auth {
     user_secret: UserSecret,
 }
 
+impl IntoResponseParts for Auth {
+    type Error = Infallible;
+    fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
+        let auth = serde_json::to_string(&self).unwrap();
+        let auth = general_purpose::STANDARD.encode(auth);
+        res.headers_mut().typed_insert(Authorization::bearer(&auth).unwrap());
+        Ok(res)
+    }
+}
+
+#[async_trait]
+impl<S> FromRequestParts<S> for Auth
+where
+    S: Send + Sync,
+{
+    type Rejection = Response;
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let TypedHeader(Authorization(token)) = parts.extract::<TypedHeader<Authorization<Bearer>>>()
+            .await
+            .map_err(|_err| (Error::BadAuthentication.into_response()))?;
+        let token = token.token();
+        let token = general_purpose::STANDARD.decode(token).map_err(|_| Error::BadAuthentication.into_response())?;
+        let auth = serde_json::from_slice(&token).map_err(|_| Error::BadAuthentication.into_response())?;
+        Ok(auth)
+    }
+}
+
+
 // TODO: for some reason it is considered harmful to use Uuid's (even crypto random 122 bits) as secrets
 #[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
 struct UserId(Uuid);
@@ -835,3 +808,56 @@ impl UserSecret {
         Self(ret)
     }
 }
+
+type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[derive(Debug)]
+enum Error {
+    BadAuthentication,
+    NoSession,
+    Absent,
+    BadPhase,
+    NotHost,
+    NoSeatsLeft,
+    NotCurrent,
+    PlayError(PlayError),
+}
+
+impl From<PlayError> for Error {
+    fn from(error: PlayError) -> Error {
+        Error::PlayError(error)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::BadAuthentication => write!(f, "authentication not valid for the player"),
+            Error::NoSession => write!(f, "request session not found"),
+            Error::Absent => write!(f, "player must be present in the game"),
+            Error::BadPhase => write!(f, "request must be applicable to current game phase"),
+            Error::NotHost => write!(f, "requests must have from host"),
+            Error::NoSeatsLeft => write!(f, "can only join sessions that aren't full"),
+            Error::NotCurrent => write!(f, "this request should be made by the current player"),
+            Error::PlayError(error) => write!(f, "{}", error),
+        }
+    }
+}
+
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        let status = match self {
+            Error::BadAuthentication => StatusCode::FORBIDDEN,
+            Error::NoSession => StatusCode::BAD_REQUEST,
+            Error::Absent => StatusCode::BAD_REQUEST,
+            Error::BadPhase => StatusCode::BAD_REQUEST,
+            Error::NotHost => StatusCode::FORBIDDEN,
+            Error::NoSeatsLeft => StatusCode::BAD_REQUEST,
+            Error::NotCurrent => StatusCode::BAD_REQUEST,
+            Error::PlayError(..) => StatusCode::BAD_REQUEST,
+        };
+        let body = self.to_string();
+        (status, body).into_response()
+    }
+}
+

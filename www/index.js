@@ -8,8 +8,8 @@ let game;
 
 window.addEventListener('load', async (e) => {
     let hostId = new URL(document.location).searchParams.get('hostId');
-    game = new Game(hostId);
-    await game.join();
+    game = await Game.create(hostId);
+    await game.eventLoop();
 });
 
 class Game {
@@ -18,53 +18,49 @@ class Game {
     options = null;
     cards = null;
 
-    hostId = null;
     userId = null;
     userSecret = null;
 
-    constructor(hostId) {
-        this.hostId = hostId;
+    static async create(hostId) {
+        const url = new URL('/api/join', document.location);
+        if (hostId !== null) {
+            url.searchParams.set('hostId', hostId);
+        }
+        const method = 'POST';
+        const headers = { 'Accept': 'application/json-seq' };
+        const response = await fetch(url, { method, headers });
+        if (!response.ok) {
+            throw new Error('could not connect', { cause: response.text() });
+        }
+        const items = response.body
+            .pipeThrough(new TextDecoderStream())
+            .pipeThrough(new TransformStream(new JsonSeqStream()));
+        const { userId, userSecret } = JSON.parse(atob(response.headers.get('Authorization').split(' ')[1]));
+        return new Game(userId, userSecret, items);
     }
 
-    async join() {
-        const joinResponse = await fetch(this.connectURL(), { method: 'POST' });
-        if (!joinResponse.ok) {
-            throw new Error('could not join the game', { cause: await joinResponse.text() });
-        }
-        const { userId, userSecret } = await joinResponse.json();
+    constructor(userId, userSecret, items) {
         this.userId = userId;
         this.userSecret = userSecret;
-
-        console.log(this.userId, this.userSecret);
-
-        const subscribeURL = this.apiURL('/api/lobby/subscribe');
-        // FIXME: resolve join() only when the future opens or errors?
-        const connection = new EventSource(subscribeURL); 
-        connection.addEventListener('error', (e) => {
-            console.error('subscription error', e);
-        });
-        connection.addEventListener('open', async (e) => await this.onJoin());
-        connection.addEventListener('welcome', async ({ data }) => await this.onWelcome(JSON.parse(data)));
-        connection.addEventListener('host', async ({ data }) => await this.onHost(JSON.parse(data)));
-        connection.addEventListener('connected', async ({ data }) => await this.onConnected(JSON.parse(data)));
-        connection.addEventListener('username', async ({ data }) => await this.onSetUsername(JSON.parse(data)));
-        connection.addEventListener('deal', async ({ data }) => await this.onDeal(JSON.parse(data)));
-        connection.addEventListener('play', async ({ data }) => await this.onPlay(JSON.parse(data)));
-        connection.addEventListener('turn', async ({ data }) => await this.onTurn(JSON.parse(data)));
-        connection.addEventListener('disconnected', async ({ data }) => await this.onDisconnected(JSON.parse(data)));
-        connection.addEventListener('message', (e) => {
-            throw new Error('received unspecified message', { cause: e });
-        });
+        this.items = items;
     }
 
-    connectURL() {
-        // FIXME: using the first argument of URL is wrong, because
-        // we want to be robust to hosting the game at like pusoygame.com/pusoy/ or pusoygame.com/
-        const url = new URL('/api/lobby/join', document.location);
-        if (this.hostId !== null) {
-            url.searchParams.set('hostId', this.hostId);
+    async eventLoop() {
+        const dispatch = {
+            welcome: this.onWelcome.bind(this),
+            host: this.onHost.bind(this),
+            connected: this.onConnected.bind(this),
+            username: this.onUsername.bind(this),
+            deal: this.onDeal.bind(this),
+            play: this.onPlay.bind(this),
+            turn: this.onTurn.bind(this),
+            disconnected: this.onDisconnected.bind(this),
+        };
+
+        for await (const { event, data } of this.items) {
+            console.log('received', event, data);
+            await dispatch[event](data);
         }
-        return url;
     }
 
     apiURL(endpoint) {
@@ -76,8 +72,15 @@ class Game {
         return url;
     }
 
-    async onJoin() {
-        console.log('made a connection');  
+    async onWelcome({ seat }) {
+        this.mySeat = seat;
+        const relatives = ['my', 'left', 'across', 'right'];
+        const offset = SEATS.indexOf(this.mySeat);
+        this.seatToRelative = {};
+        for (let i = 0; i<SEATS.length; i++) {
+            this.seatToRelative[SEATS[i]] = relatives[(i-offset+4)%relatives.length];
+        }
+        console.log('players relative', this.seatToRelative);
 
         $('#copy-game-link').addEventListener('click', async () => {
             const linkText = $('#game-link').href;
@@ -86,7 +89,7 @@ class Game {
 
         $('#my .username').addEventListener('input', async (e) => {
             const username = e.target.textContent;
-            const url = this.apiURL('/api/lobby/username');
+            const url = this.apiURL('/api/username');
             const method = 'PUT';
             const headers = { 'Content-Type': 'application/json' };
             const body = JSON.stringify({ username });
@@ -96,7 +99,7 @@ class Game {
         $('#set-action-timer').addEventListener('input', async (e) => {
             const millis = parseInt(e.target.value, 10);
             $('#action-timer-value').textContent = `${millis/1000}s`;  
-            const url = this.apiURL('/api/lobby/timer');
+            const url = this.apiURL('/api/timer');
             const method = 'PUT';
             const headers = { 'Content-Type': 'application/json' };
             const body = JSON.stringify({ millis });
@@ -104,7 +107,7 @@ class Game {
         });
 
         $('#start-game-button').addEventListener('click', async (e) => {
-            const url = this.apiURL('/api/lobby/start');
+            const url = this.apiURL('/api/start');
             const method = 'POST';
             const headers = { 'Content-Type': 'application/json' };
             const result = await fetch(url, { method, headers });
@@ -113,7 +116,7 @@ class Game {
         $('#play-cards-button').addEventListener('input', async (e) => {
             const value = $('#play-cards').value;
             const cards = value === '' ? [] : value.split(',');
-            const url = this.apiURL('/api/active/playable');
+            const url = this.apiURL('/api/playable');
             const method = 'POST';
             const headers = { 'Content-Type': 'application/json' };
             const body = JSON.stringify({ cards });
@@ -121,12 +124,11 @@ class Game {
             console.log(await result.text());
         });
 
-
         $('#play-cards-button').addEventListener('click', async (e) => {
             const value = $('#play-cards').value;
             const cards = value === '' ? [] : value.split(',');
             console.log('playing', cards);
-            const url = this.apiURL('/api/active/play');
+            const url = this.apiURL('/api/play');
             const method = 'POST';
             const headers = { 'Content-Type': 'application/json' };
             const body = JSON.stringify({ cards });
@@ -134,35 +136,21 @@ class Game {
         });
 
     }
-    
-    async onWelcome({ seat }) {
-        console.log('welcome', seat);
-        this.mySeat = seat;
-        const relatives = ['my', 'left', 'across', 'right'];
-        const offset = SEATS.indexOf(this.mySeat);
-        this.seatToRelative = {};
-        for (let i = 0; i<SEATS.length; i++) {
-            this.seatToRelative[SEATS[i]] = relatives[(i-offset+4)%relatives.length];
-        }
-        console.log('relative', this.seatToRelative);
-    }
 
     async onHost({ }) {
-        console.log('you are now host');
         const url = new URL(document.location);
-        url.searchParams.set('hostId', self.userId);
+        url.searchParams.set('hostId', this.userId);
         $('#game-link').textContent = url;
         $('#game-link').href = url;
         $('#host').style.display = 'block';
     }
 
     async onConnected({ seat }) {
-        console.log('connected', seat);
         const relative = this.seatToRelative[seat];
         $(`#${relative} .avatar`).textContent = 'human';
     }
 
-    async onSetUsername({ seat, username }) {
+    async onUsername({ seat, username }) {
         console.log('username', seat, username);
         const relative = this.seatToRelative[seat];
         $(`#${relative} .username`).textContent = username;
@@ -226,7 +214,41 @@ function throttle(period, callback) {
     };
 }
 
+class JsonSeqStream {
+    constructor() {
+        this.buffer = '';
+    }
 
+    transform(chunk, controller) {
+        this.buffer += chunk;
+
+        for (;;) {
+            let recordSeparator = this.buffer.indexOf('\x1e'); 
+            if (recordSeparator === -1) {
+                break;
+            }
+            const item = this.buffer.substring(0, recordSeparator).trim();
+            this.buffer = this.buffer.slice(recordSeparator + 1);
+            if (item.length > 0) {
+                controller.enqueue(JSON.parse(item));
+            }
+        }
+
+        try {
+            controller.enqueue(JSON.parse(this.buffer));
+            this.buffer = '';
+        } catch {
+            // maybe whatever is in the buffer is valid JSON.
+            // maybe it's not. we'll finish it later either way
+        }
+    }
+
+    flush(controller) {
+        if (this.buffer.trim().length > 0) {
+            controller.enqueue(JSON.parse(this.buffer));
+        }
+    }
+}
 
 //$('#fullscreen').addEventListener('click', async () => {
 //    try {

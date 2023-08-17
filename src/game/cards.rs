@@ -11,6 +11,9 @@ pub struct Cards {
 }
 
 impl Cards {
+    pub const ENTIRE_DECK: Cards = Self {
+        bits: 0xfffffffffffff,
+    };
     pub const CLUBS: Self = Self {
         bits: 0x1111111111111,
     };
@@ -22,9 +25,6 @@ impl Cards {
     };
     pub const DIAMONDS: Self = Self {
         bits: 0x8888888888888,
-    };
-    pub const ENTIRE_DECK: Cards = Self {
-        bits: 0xfffffffffffff,
     };
     pub const SUITS: [Self; 4] = [Self::CLUBS, Self::SPADES, Self::HEARTS, Self::DIAMONDS];
     //    pub const THREES: Self = Self::with_rank(0);
@@ -42,14 +42,13 @@ impl Cards {
     //    pub const TWOS: Self = Self::with_rank(12);
 
     pub const fn single(card: Card) -> Self {
-        Self {
-            bits: 1 << card.index,
-        }
+        let bits = 1 << card.index;
+        Self { bits }
     }
 
     pub const fn with_rank(rank: u8) -> Self {
         let bits = 0xf << (4 * rank);
-        Cards { bits }
+        Self { bits }
     }
 
     pub fn copy_rank(card: Card) -> Self {
@@ -63,9 +62,8 @@ impl Cards {
 
     #[must_use]
     pub fn insert_all(self, other: Self) -> Self {
-        Self {
-            bits: self.bits | other.bits,
-        }
+        let bits = self.bits | other.bits;
+        Self { bits }
     }
 
     #[must_use]
@@ -75,9 +73,8 @@ impl Cards {
 
     #[must_use]
     pub fn remove_all(self, other: Self) -> Self {
-        Self {
-            bits: self.bits & !other.bits,
-        }
+        let bits = self.bits & !other.bits;
+        Self { bits }
     }
 
     pub fn contains(self, card: Card) -> bool {
@@ -97,9 +94,8 @@ impl Cards {
     }
 
     pub fn intersection(self, other: Self) -> Self {
-        Cards {
-            bits: self.bits & other.bits,
-        }
+        let bits = self.bits & other.bits;
+        Self { bits }
     }
 
     pub fn len(self) -> usize {

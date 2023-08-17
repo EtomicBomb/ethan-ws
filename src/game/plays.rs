@@ -1,5 +1,4 @@
 use super::{Card, Cards};
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Play {
@@ -62,12 +61,15 @@ impl PlayKind {
         }
 
         let absolute_max = cards.max().unwrap();
-        match (cards.len(), cards.all_same_rank(), cards.all_same_suit(), is_straight(cards)) {
+        match (
+            cards.len(),
+            cards.all_same_rank(),
+            cards.all_same_suit(),
+            is_straight(cards),
+        ) {
             (1, _, _, _) => return Some(PlayKind::Single(absolute_max)),
             (2, true, _, _) => return Some(PlayKind::Pair(absolute_max)),
-            (5, _, true, true) => {
-                return Some(PlayKind::Poker(Poker::StraightFlush(absolute_max)))
-            }
+            (5, _, true, true) => return Some(PlayKind::Poker(Poker::StraightFlush(absolute_max))),
             (5, _, true, _) => return Some(PlayKind::Poker(Poker::Flush(absolute_max))),
             (5, _, _, true) => return Some(PlayKind::Poker(Poker::Straight(absolute_max))),
             _ => {}

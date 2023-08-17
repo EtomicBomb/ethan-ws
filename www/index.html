@@ -13,13 +13,23 @@
 <body>
 <main>
 
-<div id="host">
-<a href="" id="game-link"></a>
-<input type="button" id="copy-game-link" value="🔗" />
-<input type="range" min="5000" max="120000" value="30000" id="set-action-timer">
-<p id="action-timer-value"></p>
-<input type="button" id="start-game-button" value="start game" />
+<fieldset id="host">
+<legend>host settings</legend>
+<div>
+    <input type="button" id="copy-game-link" value="🔗" />
+    <a href="" id="game-link"></a>
 </div>
+<div>
+    <label>enable action timer<input type="checkbox" id="enable-action-timer" /></label>
+    <input type="range" min="5000" max="120000" value="30000" id="set-action-timer" />
+    <span id="action-timer-value"></span>
+</div>
+<div>
+    <input type="button" id="start-game-button" value="start game" />
+</div>
+</fieldset>
+
+<p id="error-description"></p>
 
 <div>
 <input type="text" id="play-cards" placeholder="cards, comma delimited"/>

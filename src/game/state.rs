@@ -2,10 +2,10 @@ use super::{Card, Cards, Play, PlayKind};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
+use serde_with::SerializeDisplay;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
-use serde_with::SerializeDisplay;
 
 #[derive(Debug)]
 pub struct GameState {

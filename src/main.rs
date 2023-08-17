@@ -2,34 +2,25 @@
 #![allow(unused_imports)]
 
 use async_trait::async_trait;
-use axum_core::response::{IntoResponseParts, ResponseParts};
 use axum::{
-    TypedHeader,
     debug_handler,
     extract::{FromRequestParts, Query, State},
-    response::{
-        sse::{self, KeepAlive, Sse},
-        Response,
-        IntoResponse,
-    },
+    response::{IntoResponse, Response},
     routing::{get, post, put},
-    Json, RequestPartsExt, Router,
+    Json, RequestPartsExt, Router, TypedHeader,
 };
+use axum_core::response::{IntoResponseParts, ResponseParts};
 //use axum_server::tls_rustls::RustlsConfig;
-use futures::future::{BoxFuture, LocalBoxFuture};
-use http::{
-    header::{HeaderValue},
-    request::Parts,
-    status::StatusCode,
-    HeaderMap,
-};
+use base64::{engine::general_purpose, Engine as _};
+use futures::future::BoxFuture;
+use headers::{authorization::Bearer, Authorization, HeaderMapExt};
+use http::{header::HeaderValue, request::Parts, status::StatusCode};
 use rand::{seq::SliceRandom, thread_rng, Rng};
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, DurationMilliSeconds};
 use std::{
-    collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc, sync::Weak,
+    collections::HashMap, convert::Infallible, fmt, mem, net::SocketAddr, sync::Arc, sync::Weak,
     time::Duration,
-    mem,
-    fmt,
 };
 use tokio::{
     sync::mpsc::{self, UnboundedSender},
@@ -43,19 +34,12 @@ use tower_http::{
     set_header::SetResponseHeaderLayer,
 };
 use uuid::Uuid;
-use serde_with::serde_as;
-use base64::{Engine as _, engine::{general_purpose}};
-use headers::{HeaderMapExt, Authorization, authorization::Bearer};
-
 
 mod game;
 mod json_stream;
-use crate::game::{choose_play, Cards, GameState, Seat, PlayError};
-
+use crate::game::{choose_play, Cards, GameState, PlayError, Seat};
 use crate::json_stream::JsonStream;
 
-mod text_stream;
-use crate::text_stream::TextStream;
 const MAX_ACTION_TIMER: Duration = Duration::from_secs(1000);
 const BOT_ACTION_TIMER: Duration = Duration::from_secs(1);
 
@@ -122,26 +106,25 @@ async fn test() -> impl IntoResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JoinQuery {
-    host_id: Option<UserId>,
+    session_id: Option<SessionId>,
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn join(
     State(state): State<Arc<Mutex<ApiState>>>,
-    Query(JoinQuery { host_id }): Query<JoinQuery>,
+    Query(JoinQuery { session_id }): Query<JoinQuery>,
 ) -> Result<impl IntoResponse> {
-    dbg!(host_id);
     let (tx, stream) = mpsc::unbounded_channel();
     let disconnected = tx.clone();
     let stream = UnboundedReceiverStream::new(stream);
     let stream = JsonStream { stream };
 
-    let auth = state.lock().await.join(host_id, tx).await?;
+    let auth = state.lock().await.join(session_id, tx).await?;
 
     task::spawn(async move {
         disconnected.closed().await;
         let mut state = state.lock().await;
-        state.disconnect(auth.user_id).await;
+        state.disconnect(auth).await;
     });
 
     Ok((auth, stream))
@@ -158,13 +141,13 @@ async fn username(
     auth: Auth,
     Json(UsernameRequest { username }): Json<UsernameRequest>,
 ) -> Result<impl IntoResponse> {
-    let (phase, seat) = state.lock().await.get_seat(auth).await?;
+    let phase = state.lock().await.check_auth(auth).await?;
     let mut phase = phase.lock().await;
-    phase.username(seat, username).await
+    phase.username(auth.seat, username).await
 }
 
-#[derive(Deserialize)]
 #[serde_as]
+#[derive(Deserialize)]
 struct ActionTimerRequest {
     #[serde_as(as = "Option<DurationMilliSeconds<u64>>")]
     millis: Option<Duration>,
@@ -176,19 +159,16 @@ async fn timer(
     auth: Auth,
     Json(ActionTimerRequest { millis }): Json<ActionTimerRequest>,
 ) -> Result<impl IntoResponse> {
-    let (phase, seat) = state.lock().await.get_seat(auth).await?;
-    phase.lock().await.timer(seat, millis).await?;
+    let phase = state.lock().await.check_auth(auth).await?;
+    phase.lock().await.timer(auth.seat, millis).await?;
     Ok(())
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn start(
-    State(state): State<Arc<Mutex<ApiState>>>,
-    auth: Auth,
-) -> Result<impl IntoResponse> {
-    let (phase, seat) = state.lock().await.get_seat(auth).await?;
+async fn start(State(state): State<Arc<Mutex<ApiState>>>, auth: Auth) -> Result<impl IntoResponse> {
+    let phase = state.lock().await.check_auth(auth).await?;
     let mut phase = phase.lock().await;
-    phase.start(seat).await
+    phase.start(auth.seat).await
 }
 
 #[derive(Deserialize)]
@@ -202,9 +182,9 @@ async fn playable(
     auth: Auth,
     Json(PlayRequest { cards }): Json<PlayRequest>,
 ) -> Result<impl IntoResponse> {
-    let (phase, seat) = state.lock().await.get_seat(auth).await?;
+    let phase = state.lock().await.check_auth(auth).await?;
     let phase = phase.lock().await;
-    let phase = phase.playable(seat, cards);
+    let phase = phase.playable(auth.seat, cards);
     phase.await
 }
 
@@ -214,14 +194,14 @@ async fn play(
     auth: Auth,
     Json(PlayRequest { cards }): Json<PlayRequest>,
 ) -> Result<impl IntoResponse> {
-    let (phase, seat) = state.lock().await.get_seat(auth).await?;
+    let phase = state.lock().await.check_auth(auth).await?;
     let mut phase = phase.lock().await;
-    phase.human_play(seat, cards).await
+    phase.human_play(auth.seat, cards).await
 }
 
 #[derive(Default)]
 struct ApiState {
-    phases: HashMap<UserId, Arc<Mutex<dyn Phase>>>,
+    phases: HashMap<SessionId, Arc<Mutex<dyn Phase>>>,
     this: Weak<Mutex<ApiState>>,
 }
 
@@ -235,110 +215,114 @@ impl ApiState {
         })
     }
 
-    async fn join(&mut self, host_id: Option<UserId>, tx: UnboundedSender<Respond>) -> Result<Auth> {
-        let phase = match host_id {
-            Some(host_id) => Arc::clone(self.phases.get(&host_id).ok_or(Error::NoSession)?),
-            None => Lobby::new(Weak::clone(&self.this)),
+    async fn join(
+        &mut self,
+        session_id: Option<SessionId>,
+        tx: UnboundedSender<Respond>,
+    ) -> Result<Auth> {
+        let phase = match session_id {
+            Some(session_id) => Arc::clone(self.phases.get(&session_id).ok_or(Error::NoSession)?),
+            None => {
+                let session_id = SessionId::random();
+                let phase: Arc<Mutex<dyn Phase>> = Lobby::new(session_id, Weak::clone(&self.this));
+                self.phases.insert(session_id, Arc::clone(&phase));
+                phase
+            }
         };
         let auth = phase.lock().await.join(tx).await?;
-        self.phases.insert(auth.user_id, phase);
         Ok(auth)
     }
 
-    async fn get_seat(&self, auth: Auth) -> Result<(Arc<Mutex<dyn Phase>>, Seat)> {
-        let phase = self.phases.get(&auth.user_id).ok_or(Error::NoSession)?;
-        let seat = phase.lock().await;
-        let seat = seat.get_seat(auth);
-        let seat = seat.await?;
-        Ok((Arc::clone(phase), seat))
+    async fn check_auth(&self, auth: Auth) -> Result<Arc<Mutex<dyn Phase>>> {
+        let phase = self.phases.get(&auth.session_id).ok_or(Error::NoSession)?;
+        let check_auth = phase.lock().await;
+        let check_auth = check_auth.check_auth(auth);
+        check_auth.await?;
+        let phase = Arc::clone(phase);
+        Ok(phase)
     }
 
-    async fn disconnect(&mut self, user_id: UserId) {
+    async fn disconnect(&mut self, auth: Auth) {
         // there should be only one thingn in these maps
-        if let Some(phase) = self.phases.remove(&user_id) {
-            let mut phase = phase.lock().await;
-            let _ = phase.disconnect(user_id).await;
+        let Some(phase) = self.phases.get(&auth.session_id) else { return };
+        let phase = Arc::clone(phase);
+        let mut phase = phase.lock().await;
+        let Ok(now_empty) = phase.disconnect(auth).await else { return };
+        if now_empty {
+            self.phases.remove(&auth.session_id);
         }
     }
 
-    fn transition(&mut self, user_ids: Vec<UserId>, new_phase: Arc<Mutex<dyn Phase>>) {
-        for &user_id in user_ids.iter() {
-            self.phases.insert(user_id, Arc::clone(&new_phase));
-        }
+    fn transition(&mut self, session_id: SessionId, new_phase: Arc<Mutex<dyn Phase>>) {
+        self.phases.insert(session_id, Arc::clone(&new_phase));
     }
 }
 
 #[async_trait]
 trait Phase: Send {
-    async fn get_seat(&self, auth: Auth) -> Result<Seat>;
+    async fn check_auth(&self, auth: Auth) -> Result<()>;
     async fn join(&mut self, tx: UnboundedSender<Respond>) -> Result<Auth>;
     async fn timer(&mut self, seat: Seat, timer: Option<Duration>) -> Result<()>;
     async fn username(&mut self, seat: Seat, username: String) -> Result<()>;
     async fn start(&mut self, seat: Seat) -> Result<()>;
     async fn playable(&self, seat: Seat, cards: Cards) -> Result<()>;
     async fn human_play(&mut self, seat: Seat, cards: Cards) -> Result<()>;
-    async fn disconnect(&mut self, user_id: UserId) -> Result<()>;
+    async fn disconnect(&mut self, auth: Auth) -> Result<bool>;
 }
 
 struct Lobby {
     timer: Option<Duration>,
     usernames: HashMap<Seat, String>,
-    seats: Vec<Seat>,
-    seats_left: usize,
-    host: Option<Seat>,
     common: Common,
 }
 
 impl Lobby {
-    fn new(api_state: Weak<Mutex<ApiState>>) -> Arc<Mutex<Self>> {
+    fn new(session_id: SessionId, api_state: Weak<Mutex<ApiState>>) -> Arc<Mutex<Self>> {
         Arc::new_cyclic(|_this| {
-            let mut seats = Vec::from(Seat::ALL);
-            seats.shuffle(&mut thread_rng());
             let timer = None;
-            let seats_left = 4;
-            let host = None;
-            let common = Common::new(api_state);
+            let common = Common::new(session_id, api_state);
             let usernames = HashMap::default();
-            Mutex::new(Self { timer, usernames, seats, seats_left, host, common })
+            Mutex::new(Self {
+                timer,
+                usernames,
+                common,
+            })
         })
     }
 
     fn is_host(&self, seat: Seat) -> bool {
-        self.host == Some(seat)
+        self.common.host() == Some(seat)
     }
 }
 
 #[async_trait]
 impl Phase for Lobby {
-    async fn get_seat(&self, auth: Auth) -> Result<Seat> {
-        self.common.get_seat(auth)
-	}
+    async fn check_auth(&self, auth: Auth) -> Result<()> {
+        self.common.check_auth(auth)
+    }
 
     async fn join(&mut self, tx: UnboundedSender<Respond>) -> Result<Auth> {
-        self.seats_left = self.seats_left.checked_sub(1).ok_or(Error::NoSeatsLeft)?;
-        let seat = self.seats[self.seats_left];
-        let auth = self.common.new_user(seat, tx);
-        self.host.get_or_insert(seat);
+        let auth = self.common.new_user(tx)?;
 
-        self.common.respond(seat, Respond::Welcome { seat }).await;
-        if self.is_host(seat) {
-            self.common.respond(seat, Respond::Host { }).await;
+        self.common.respond(auth.seat, Respond::Welcome {}).await;
+        if self.is_host(auth.seat) {
+            self.common.respond(auth.seat, Respond::Host {}).await;
         }
         for other in Seat::ALL {
-            if other != seat {
-                self.common.respond(other, Respond::Connected { seat }).await;
+            if other != auth.seat {
+                self.common
+                    .respond(other, Respond::Connected { seat: auth.seat })
+                    .await;
             }
-            if self.common.is_human(other) && other != seat {
-                self
-                    .common
-                    .respond(seat, Respond::Connected { seat: other })
+            if self.common.is_human(other) && other != auth.seat {
+                self.common
+                    .respond(auth.seat, Respond::Connected { seat: other })
                     .await;
             }
             if let Some(username) = self.usernames.get(&other) {
-                self
-                    .common
+                self.common
                     .respond(
-                        seat,
+                        auth.seat,
                         Respond::Username {
                             seat: other,
                             username: username.clone(),
@@ -347,22 +331,18 @@ impl Phase for Lobby {
                     .await;
             }
         }
-        
+
         Ok(auth)
-	}
-    
+    }
+
     async fn timer(&mut self, seat: Seat, timer: Option<Duration>) -> Result<()> {
         if !self.is_host(seat) {
             return Err(Error::NotHost);
         }
         let too_long = timer.is_some_and(|timer| timer > MAX_ACTION_TIMER);
-        self.timer = if too_long {
-            None
-        } else {
-            timer
-        };
+        self.timer = if too_long { None } else { timer };
         Ok(())
-	}
+    }
 
     async fn username(&mut self, seat: Seat, username: String) -> Result<()> {
         self.usernames.insert(seat, username.clone());
@@ -371,13 +351,12 @@ impl Phase for Lobby {
                 continue;
             }
             let username = username.clone();
-            self
-                .common
+            self.common
                 .respond(other, Respond::Username { seat, username })
                 .await;
         }
         Ok(())
-	}
+    }
 
     async fn start(&mut self, seat: Seat) -> Result<()> {
         if !self.is_host(seat) {
@@ -385,47 +364,42 @@ impl Phase for Lobby {
         }
         let timer = self.timer;
         let api_state = self.common.api_state();
-        let user_ids = Vec::from_iter(self.common.user_ids());
+        let session_id = self.common.session_id();
         let common = mem::take(&mut self.common);
         let active = Active::new(timer, common).await;
-        api_state.lock().await.transition(user_ids, active);
+        api_state.lock().await.transition(session_id, active);
         Ok(())
-	}
+    }
 
     async fn playable(&self, _seat: Seat, _cards: Cards) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn human_play(&mut self, _seat: Seat, _cards: Cards) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
-    async fn disconnect(&mut self, user_id: UserId) -> Result<()> {
-        let seat = self.common.disconnect(user_id)?;
+    async fn disconnect(&mut self, auth: Auth) -> Result<bool> {
+        let (now_empty, host_disconnect) = self.common.disconnect(auth)?;
+
         for other in Seat::ALL {
-            self.common.respond(other, Respond::Disconnected { seat }).await;
+            self.common
+                .respond(other, Respond::Disconnected { seat: auth.seat })
+                .await;
         }
 
-        self.seats_left += 1;
-        dbg!(self.seats_left, &self.seats);
-        if self.is_host(seat) {
-            dbg!(seat);
-            self.host = self.seats.iter().rev().cloned()
-                .find(|&new_host| self.common.is_human(new_host));
-            dbg!(self.host);
-            if let Some(new_host) = self.host {
-            dbg!(new_host);
-                self.common.respond(new_host, Respond::Host { }).await;
+        if host_disconnect {
+            if let Some(new_host) = self.common.host() {
+                self.common.respond(new_host, Respond::Host {}).await;
             }
         }
 
-        Ok(())
-	}
+        Ok(now_empty)
+    }
 }
 
 struct Active {
     timer: Option<Duration>,
-    usernames: HashMap<Seat, String>,
     game_state: GameState,
     deadline: Option<Instant>,
     common: Common,
@@ -438,8 +412,13 @@ impl Active {
             let this = Weak::clone(this);
             let game_state = GameState::default();
             let deadline = None;
-            let usernames = HashMap::default();
-            Mutex::new(Self { timer, usernames, game_state, deadline, common, this })
+            Mutex::new(Self {
+                timer,
+                game_state,
+                deadline,
+                common,
+                this,
+            })
         });
         this.lock().await.deal().await;
         this
@@ -456,7 +435,9 @@ impl Active {
     async fn auto_play(&mut self) {
         let current_player = self.game_state.current_player();
         let cards = choose_play(&self.game_state).cards;
-        self.play(current_player, cards).await.expect("our bots should always choose valid plays");
+        self.play(current_player, cards)
+            .await
+            .expect("our bots should always choose valid plays");
     }
 
     async fn play(&mut self, seat: Seat, cards: Cards) -> Result<()> {
@@ -465,8 +446,7 @@ impl Active {
         let load = self.game_state.hand(seat).len();
         let win = load == 0;
         for other in Seat::ALL {
-            self
-                .common
+            self.common
                 .respond(
                     other,
                     Respond::Play {
@@ -493,15 +473,14 @@ impl Active {
         let timer = if self.common.is_human(current_player) {
             self.timer
         } else {
-            Some(BOT_ACTION_TIMER) 
+            Some(BOT_ACTION_TIMER)
         };
 
         self.deadline = timer.and_then(|timer| Instant::now().checked_add(timer));
 
         let control = self.game_state.has_control();
         for other in Seat::ALL {
-            self
-                .common
+            self.common
                 .respond(
                     other,
                     Respond::Turn {
@@ -539,34 +518,34 @@ impl Active {
 
     async fn win(&mut self) {
         let api_state = self.common.api_state();
-        let user_ids = Vec::from_iter(self.common.user_ids());
+        let session_id = self.common.session_id();
         let common = mem::take(&mut self.common);
         let phase = Win::new(common);
-        api_state.lock().await.transition(user_ids, phase);
+        api_state.lock().await.transition(session_id, phase);
     }
 }
 
 #[async_trait]
 impl Phase for Active {
-    async fn get_seat(&self, auth: Auth) -> Result<Seat> {
-        self.common.get_seat(auth)
-	}
+    async fn check_auth(&self, auth: Auth) -> Result<()> {
+        self.common.check_auth(auth)
+    }
 
     async fn join(&mut self, _tx: UnboundedSender<Respond>) -> Result<Auth> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn timer(&mut self, _seat: Seat, _timer: Option<Duration>) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn username(&mut self, _seat: Seat, _username: String) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn start(&mut self, _seat: Seat) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn playable(&self, seat: Seat, cards: Cards) -> Result<()> {
         let current_player = self.game_state.current_player();
@@ -575,7 +554,7 @@ impl Phase for Active {
         }
         self.game_state.playable(cards)?;
         Ok(())
-	}
+    }
 
     async fn human_play(&mut self, seat: Seat, cards: Cards) -> Result<()> {
         let current_player = self.game_state.current_player();
@@ -586,15 +565,18 @@ impl Phase for Active {
         Ok(())
     }
 
-    async fn disconnect(&mut self, user_id: UserId) -> Result<()> {
-        let seat = self.common.disconnect(user_id)?;
+    async fn disconnect(&mut self, auth: Auth) -> Result<bool> {
+        let (now_empty, _host_disconnect) = self.common.disconnect(auth)?;
         for other in Seat::ALL {
-            self.common.respond(other, Respond::Disconnected { seat }).await;
+            self.common
+                .respond(other, Respond::Disconnected { seat: auth.seat })
+                .await;
         }
-        // TODO: what if current player whose turn it is disconnects
-        Ok(())
-	}
-
+        if self.game_state.current_player() == auth.seat {
+            self.solicit().await;
+        }
+        Ok(now_empty)
+    }
 }
 
 struct Win {
@@ -603,126 +585,149 @@ struct Win {
 
 impl Win {
     fn new(common: Common) -> Arc<Mutex<Self>> {
-        Arc::new_cyclic(|_weak| {
-            Mutex::new(Self { common })
-        })
+        Arc::new_cyclic(|_weak| Mutex::new(Self { common }))
     }
 }
 
 #[async_trait]
 impl Phase for Win {
-    async fn get_seat(&self, auth: Auth) -> Result<Seat> {
-        self.common.get_seat(auth)
-	}
+    async fn check_auth(&self, auth: Auth) -> Result<()> {
+        self.common.check_auth(auth)
+    }
 
     async fn join(&mut self, _tx: UnboundedSender<Respond>) -> Result<Auth> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn timer(&mut self, _seat: Seat, _timer: Option<Duration>) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn username(&mut self, _seat: Seat, _username: String) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn start(&mut self, _seat: Seat) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn playable(&self, _seat: Seat, _cards: Cards) -> Result<()> {
         Err(Error::BadPhase)
-	}
+    }
 
     async fn human_play(&mut self, _seat: Seat, _cards: Cards) -> Result<()> {
         Err(Error::BadPhase)
     }
 
-    async fn disconnect(&mut self, user_id: UserId) -> Result<()> {
-        let seat = self.common.disconnect(user_id)?;
+    async fn disconnect(&mut self, auth: Auth) -> Result<bool> {
+        let (now_empty, _host_disconnect) = self.common.disconnect(auth)?;
         for other in Seat::ALL {
-            self.common.respond(other, Respond::Disconnected { seat }).await;
+            self.common
+                .respond(other, Respond::Disconnected { seat: auth.seat })
+                .await;
         }
-        Ok(())
-	}
-
+        Ok(now_empty)
+    }
 }
 
-
+struct UserInfo {
+    user_secret: UserSecret,
+    tx: UnboundedSender<Respond>,
+}
 
 #[derive(Default)]
 struct Common {
-    users: HashMap<UserId, Seat>,
-    secrets: HashMap<Seat, UserSecret>,
-    txs: HashMap<Seat, UnboundedSender<Respond>>,
+    session_id: SessionId,
+    user_info: HashMap<Seat, UserInfo>,
     api_state: Weak<Mutex<ApiState>>,
+    seats: Vec<Seat>,
+    host: Option<Seat>,
 }
 
 impl Common {
-    fn new(api_state: Weak<Mutex<ApiState>>) -> Self {
+    fn new(session_id: SessionId, api_state: Weak<Mutex<ApiState>>) -> Self {
+        let mut seats = Vec::from(Seat::ALL);
+        seats.shuffle(&mut thread_rng());
         Self {
-            users: HashMap::default(),
-            secrets: HashMap::default(),
-            txs: HashMap::default(),
+            session_id,
+            seats,
+            user_info: HashMap::default(),
+            host: None,
             api_state,
         }
     }
 
     fn api_state(&self) -> Arc<Mutex<ApiState>> {
-        self.api_state.upgrade().expect("api_state should persist the entire lifetime of the program")
+        self.api_state
+            .upgrade()
+            .expect("api_state should persist the entire lifetime of the program")
+    }
+
+    fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    fn host(&self) -> Option<Seat> {
+        self.host
     }
 
     fn is_human(&self, seat: Seat) -> bool {
-        self.txs.contains_key(&seat)
+        self.user_info.contains_key(&seat)
     }
 
-    fn human_seats(&self) -> impl Iterator<Item=Seat> + '_ {
-        self.users.values().cloned()
-    }
-
-    fn user_ids(&self) -> impl Iterator<Item=UserId> + '_ {
-        self.users.keys().cloned()
-    }
-
-    fn new_user(&mut self, seat: Seat, tx: UnboundedSender<Respond>) -> Auth {
-        let user_id = UserId::random();
+    fn new_user(&mut self, tx: UnboundedSender<Respond>) -> Result<Auth> {
+        let seat = self
+            .seats
+            .iter()
+            .rev()
+            .cloned()
+            .find(|&seat| !self.is_human(seat))
+            .ok_or(Error::Full)?;
         let user_secret = UserSecret::random();
-        self.txs.insert(seat, tx);
-        self.users.insert(user_id, seat);
-        self.secrets.insert(seat, user_secret);
-        Auth { user_id, user_secret }
+        let session_id = self.session_id;
+        self.user_info.insert(seat, UserInfo { user_secret, tx });
+        self.host.get_or_insert(seat);
+        Ok(Auth {
+            user_secret,
+            seat,
+            session_id,
+        })
     }
 
-    fn get_seat(&self, auth: Auth) -> Result<Seat> {
-        let seat = *self.users.get(&auth.user_id).ok_or(Error::Absent)?;
-        if self.secrets[&seat] != auth.user_secret {
+    fn check_auth(&self, auth: Auth) -> Result<()> {
+        if self.user_info[&auth.seat].user_secret != auth.user_secret {
             return Err(Error::BadAuthentication);
         }
-        Ok(seat)
+        Ok(())
     }
 
-    fn disconnect(&mut self, user_id: UserId) -> Result<Seat> {
-        let seat = self.users.remove(&user_id).ok_or(Error::Absent)?;
-        self.txs.remove(&seat);
-        self.secrets.remove(&seat);
-        Ok(seat)
+    fn disconnect(&mut self, auth: Auth) -> Result<(bool, bool)> {
+        self.user_info.remove(&auth.seat).ok_or(Error::Absent)?;
+        let host_disconnect = self.host == Some(auth.seat);
+        if host_disconnect {
+            self.host = self
+                .seats
+                .iter()
+                .rev()
+                .cloned()
+                .find(|&new_host| self.is_human(new_host));
+        }
+        let now_empty = self.user_info.is_empty();
+        Ok((now_empty, host_disconnect))
     }
 
     async fn respond(&mut self, seat: Seat, response: Respond) {
-        let Some(tx) = self.txs.get(&seat) else { return };
+        let Some(UserInfo { tx, .. }) = self.user_info.get(&seat) else { return };
         let _ = tx.send(response);
     }
 }
 
+#[serde_as]
 #[derive(Serialize)]
 #[serde(tag = "event", content = "data")]
 #[serde(rename_all = "camelCase")]
-#[serde_as]
 enum Respond {
-    Welcome {
-        seat: Seat,
-    },
+    Welcome {},
     Host {},
     Connected {
         seat: Seat,
@@ -754,7 +759,8 @@ enum Respond {
 #[derive(Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Auth {
-    user_id: UserId,
+    seat: Seat,
+    session_id: SessionId,
     user_secret: UserSecret,
 }
 
@@ -763,7 +769,8 @@ impl IntoResponseParts for Auth {
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
         let auth = serde_json::to_string(&self).unwrap();
         let auth = general_purpose::STANDARD.encode(auth);
-        res.headers_mut().typed_insert(Authorization::bearer(&auth).unwrap());
+        res.headers_mut()
+            .typed_insert(Authorization::bearer(&auth).unwrap());
         Ok(res)
     }
 }
@@ -775,22 +782,25 @@ where
 {
     type Rejection = Response;
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let TypedHeader(Authorization(token)) = parts.extract::<TypedHeader<Authorization<Bearer>>>()
+        let TypedHeader(Authorization(token)) = parts
+            .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
             .map_err(|_err| (Error::BadAuthentication.into_response()))?;
         let token = token.token();
-        let token = general_purpose::STANDARD.decode(token).map_err(|_| Error::BadAuthentication.into_response())?;
-        let auth = serde_json::from_slice(&token).map_err(|_| Error::BadAuthentication.into_response())?;
+        let token = general_purpose::STANDARD
+            .decode(token)
+            .map_err(|_| Error::BadAuthentication.into_response())?;
+        let auth =
+            serde_json::from_slice(&token).map_err(|_| Error::BadAuthentication.into_response())?;
         Ok(auth)
     }
 }
 
-
 // TODO: for some reason it is considered harmful to use Uuid's (even crypto random 122 bits) as secrets
-#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
-struct UserId(Uuid);
+#[derive(Default, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
+struct SessionId(Uuid);
 
-impl UserId {
+impl SessionId {
     fn random() -> Self {
         let ret = thread_rng().gen();
         let ret = uuid::Builder::from_random_bytes(ret).into_uuid();
@@ -798,7 +808,7 @@ impl UserId {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
+#[derive(Default, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
 struct UserSecret(Uuid);
 
 impl UserSecret {
@@ -818,7 +828,7 @@ enum Error {
     Absent,
     BadPhase,
     NotHost,
-    NoSeatsLeft,
+    Full,
     NotCurrent,
     PlayError(PlayError),
 }
@@ -837,7 +847,7 @@ impl fmt::Display for Error {
             Error::Absent => write!(f, "player must be present in the game"),
             Error::BadPhase => write!(f, "request must be applicable to current game phase"),
             Error::NotHost => write!(f, "requests must have from host"),
-            Error::NoSeatsLeft => write!(f, "can only join sessions that aren't full"),
+            Error::Full => write!(f, "can only join sessions that aren't full"),
             Error::NotCurrent => write!(f, "this request should be made by the current player"),
             Error::PlayError(error) => write!(f, "{}", error),
         }
@@ -852,7 +862,7 @@ impl IntoResponse for Error {
             Error::Absent => StatusCode::BAD_REQUEST,
             Error::BadPhase => StatusCode::BAD_REQUEST,
             Error::NotHost => StatusCode::FORBIDDEN,
-            Error::NoSeatsLeft => StatusCode::BAD_REQUEST,
+            Error::Full => StatusCode::BAD_REQUEST,
             Error::NotCurrent => StatusCode::BAD_REQUEST,
             Error::PlayError(..) => StatusCode::BAD_REQUEST,
         };
@@ -860,4 +870,3 @@ impl IntoResponse for Error {
         (status, body).into_response()
     }
 }
-

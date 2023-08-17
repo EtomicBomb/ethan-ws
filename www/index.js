@@ -7,24 +7,22 @@ const SEATS = ['north', 'east', 'south', 'west'];
 let game;
 
 window.addEventListener('load', async (e) => {
-    let hostId = new URL(document.location).searchParams.get('hostId');
-    game = await Game.create(hostId);
+    let sessionId = new URL(document.location).searchParams.get('sessionId');
+    game = await Game.create(sessionId);
     await game.eventLoop();
 });
 
 class Game {
-    seatToRelative = null;
-    mySeat = null;
-    options = null;
     cards = null;
 
-    userId = null;
-    userSecret = null;
+    auth = null;
+    items = null;
+    seatToRelative = null;
 
-    static async create(hostId) {
+    static async create(sessionId) {
         const url = new URL('/api/join', document.location);
-        if (hostId !== null) {
-            url.searchParams.set('hostId', hostId);
+        if (sessionId !== null) {
+            url.searchParams.set('sessionId', sessionId);
         }
         const method = 'POST';
         const headers = { 'Accept': 'application/json-seq' };
@@ -35,14 +33,21 @@ class Game {
         const items = response.body
             .pipeThrough(new TextDecoderStream())
             .pipeThrough(new TransformStream(new JsonSeqStream()));
-        const { userId, userSecret } = JSON.parse(atob(response.headers.get('Authorization').split(' ')[1]));
-        return new Game(userId, userSecret, items);
+        const auth = JSON.parse(atob(response.headers.get('Authorization').split(' ')[1]));
+        return new Game(auth, items);
     }
 
-    constructor(userId, userSecret, items) {
-        this.userId = userId;
-        this.userSecret = userSecret;
+    constructor(auth, items) {
+        this.auth = auth;
         this.items = items;
+
+        const relatives = ['my', 'left', 'across', 'right'];
+        const offset = SEATS.indexOf(this.auth.seat);
+        this.seatToRelative = {};
+        for (let i = 0; i<SEATS.length; i++) {
+            this.seatToRelative[SEATS[i]] = relatives[(i-offset+4)%relatives.length];
+        }
+        console.log('players relative', this.seatToRelative);
     }
 
     async eventLoop() {
@@ -63,24 +68,20 @@ class Game {
         }
     }
 
-    apiURL(endpoint) {
+    async makeRequest(endpoint, method, body) {
         // FIXME: using the first argument of URL is wrong, because
         // we want to be robust to hosting the game at like etomicbomb.com/pusoy/ or pusoygame.com/
         const url = new URL(endpoint, document.location);
-        url.searchParams.set('userId', this.gameId);
-        url.searchParams.set('userSecret', this.userSecret);
-        return url;
+        const token = btoa(JSON.stringify(this.auth));
+        const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+        body = JSON.stringify(body);
+        const result = await fetch(url, { headers, method, body });
+        if (!result.ok) {
+            $('#error-description').textContent = await result.text();
+        }
     }
 
     async onWelcome({ seat }) {
-        this.mySeat = seat;
-        const relatives = ['my', 'left', 'across', 'right'];
-        const offset = SEATS.indexOf(this.mySeat);
-        this.seatToRelative = {};
-        for (let i = 0; i<SEATS.length; i++) {
-            this.seatToRelative[SEATS[i]] = relatives[(i-offset+4)%relatives.length];
-        }
-        console.log('players relative', this.seatToRelative);
 
         $('#copy-game-link').addEventListener('click', async () => {
             const linkText = $('#game-link').href;
@@ -89,57 +90,44 @@ class Game {
 
         $('#my .username').addEventListener('input', async (e) => {
             const username = e.target.textContent;
-            const url = this.apiURL('/api/username');
-            const method = 'PUT';
-            const headers = { 'Content-Type': 'application/json' };
-            const body = JSON.stringify({ username });
-            const response = await fetch(url, { method, headers, body });
+            const response = await this.makeRequest('/api/username', 'PUT', { username });
         });
 
         $('#set-action-timer').addEventListener('input', async (e) => {
             const millis = parseInt(e.target.value, 10);
-            $('#action-timer-value').textContent = `${millis/1000}s`;  
-            const url = this.apiURL('/api/timer');
-            const method = 'PUT';
-            const headers = { 'Content-Type': 'application/json' };
-            const body = JSON.stringify({ millis });
-            const result = await fetch(url, { method, headers, body });
+            $('#action-timer-value').textContent = `${Math.round(millis/1000)}s`;  
         });
 
+        async function updateActionTimer() {
+            const checked = $('#enable-action-timer').checked;
+            const value = parseInt($('#set-action-timer').value, 10);
+            const millis = checked ? value : null;
+            const response = await this.makeRequest('/api/timer', 'PUT', { millis });
+        }
+        $('#enable-action-timer').addEventListener('change', updateActionTimer.bind(this));
+        $('#set-action-timer').addEventListener('change', updateActionTimer.bind(this));
+
         $('#start-game-button').addEventListener('click', async (e) => {
-            const url = this.apiURL('/api/start');
-            const method = 'POST';
-            const headers = { 'Content-Type': 'application/json' };
-            const result = await fetch(url, { method, headers });
+            const response = await this.makeRequest('/api/start', 'POST', { });
         });
 
         $('#play-cards-button').addEventListener('input', async (e) => {
             const value = $('#play-cards').value;
             const cards = value === '' ? [] : value.split(',');
-            const url = this.apiURL('/api/playable');
-            const method = 'POST';
-            const headers = { 'Content-Type': 'application/json' };
-            const body = JSON.stringify({ cards });
-            const result = await fetch(url, { method, headers, body });
-            console.log(await result.text());
+            const response = await this.makeRequest('/api/playable', 'POST', { cards });
         });
 
         $('#play-cards-button').addEventListener('click', async (e) => {
             const value = $('#play-cards').value;
             const cards = value === '' ? [] : value.split(',');
-            console.log('playing', cards);
-            const url = this.apiURL('/api/play');
-            const method = 'POST';
-            const headers = { 'Content-Type': 'application/json' };
-            const body = JSON.stringify({ cards });
-            const result = await fetch(url, { method, headers, body });
+            const response = await this.makeRequest('/api/play', 'POST', { cards });
         });
 
     }
 
     async onHost({ }) {
         const url = new URL(document.location);
-        url.searchParams.set('hostId', this.userId);
+        url.searchParams.set('sessionId', this.auth.sessionId);
         $('#game-link').textContent = url;
         $('#game-link').href = url;
         $('#host').style.display = 'block';
@@ -157,14 +145,13 @@ class Game {
     }
 
     async onDeal({ cards }) {
-        console.log('deal', cards);
+        $('#host').style.display = 'none';
         this.cards = cards;
         $(`#my .cards`).textContent = this.cards;
         $(`#my .load`).textContent = this.cards.length;
     }
 
     async onPlay({ seat, load, cards, pass }) {
-        console.log('play', seat, load, cards);
         const relative = this.seatToRelative[seat];
         $(`#${relative} .action-timer .progress`).style.removeProperty('animation');
         $(`#${relative} .load`).textContent = load;
@@ -185,14 +172,13 @@ class Game {
         }
     }
 
-    async onTurn({ seat, timer, control }) {
-        console.log('turn', seat, timer);
+    async onTurn({ seat, millis, control }) {
         const relative = this.seatToRelative[seat];
         $(`#${relative} .turn`).textContent = 'turn';
         $(`#${relative} .control`).textContent = control ? 'control' : '';
         $(`#${relative} .passed`).textContent = '';
-        if (timer !== null) {
-            $(`#${relative} .action-timer .progress`).style.animation = `${timer}ms linear 0s action-progress`;
+        if (millis !== null) {
+            $(`#${relative} .action-timer .progress`).style.animation = `${millis}ms linear 0s action-progress`;
         }
     }
 

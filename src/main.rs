@@ -1,44 +1,53 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-use async_trait::async_trait;
-use axum::{
-    debug_handler,
-    extract::{FromRequestParts, Query, State},
-    response::{IntoResponse, Response},
-    routing::{get, post, put},
-    Json, RequestPartsExt, Router, TypedHeader,
-};
-use axum_core::response::{IntoResponseParts, ResponseParts};
-//use axum_server::tls_rustls::RustlsConfig;
-use base64::{engine::general_purpose, Engine as _};
-use futures::future::BoxFuture;
-use headers::{authorization::Bearer, Authorization, HeaderMapExt};
-use http::{header::HeaderValue, request::Parts, status::StatusCode};
-use rand::{seq::SliceRandom, thread_rng, Rng};
-use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DurationMilliSeconds};
-use std::{
-    collections::HashMap, convert::Infallible, fmt, mem, net::SocketAddr, sync::Arc, sync::Weak,
-    time::Duration,
-};
-use tokio::{
-    sync::mpsc::{self, UnboundedSender},
-    sync::Mutex,
-    task,
-    time::{sleep_until, Instant},
-};
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tower_http::{
-    services::{ServeDir, ServeFile},
-    set_header::SetResponseHeaderLayer,
-};
-use uuid::Uuid;
-
 mod game;
-mod json_stream;
-use crate::game::{choose_play, Cards, GameState, PlayError, Seat};
-use crate::json_stream::JsonStream;
+mod json_seq;
+
+use {
+    async_trait::async_trait,
+    axum::{
+        debug_handler,
+        extract::{FromRequestParts, Query, State},
+        response::{IntoResponse, Response},
+        routing::{get, post, put},
+        Json, RequestPartsExt, Router, TypedHeader,
+    },
+    axum_core::response::{IntoResponseParts, ResponseParts},
+    //	axum_server::tls_rustls::RustlsConfig,
+    base64::{engine::general_purpose, Engine as _},
+    futures::future::BoxFuture,
+    headers::{authorization::Bearer, Authorization, HeaderMapExt},
+    http::{header::HeaderValue, request::Parts, status::StatusCode},
+    rand::{seq::SliceRandom, thread_rng, Rng},
+    serde::{Deserialize, Serialize},
+    serde_with::{serde_as, DurationMilliSeconds},
+    std::{
+        collections::HashMap,
+        convert::Infallible,
+        fmt, mem,
+        net::{Ipv4Addr, SocketAddr},
+        sync::Arc,
+        sync::Weak,
+        time::Duration,
+    },
+    tokio::{
+        sync::mpsc::{self, UnboundedSender},
+        sync::Mutex,
+        task,
+        time::{sleep_until, Instant},
+    },
+    tokio_stream::wrappers::UnboundedReceiverStream,
+    tower_http::{
+        services::{ServeDir, ServeFile},
+        set_header::SetResponseHeaderLayer,
+    },
+    uuid::Uuid,
+    crate::{
+        game::{choose_play, Cards, GameState, PlayError, Seat},
+        json_seq::JsonSeq,
+    },
+};
 
 const MAX_ACTION_TIMER: Duration = Duration::from_secs(1000);
 const BOT_ACTION_TIMER: Duration = Duration::from_secs(1);
@@ -51,10 +60,11 @@ async fn main() {
     //    )
     //    .await
     //    .unwrap();
+    //
 
     let app = app();
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+    let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8000));
     eprintln!("listening on {}", addr);
 
     //    axum_server::bind_rustls(addr, config)
@@ -100,7 +110,7 @@ async fn test() -> impl IntoResponse {
         }
     });
     let stream = UnboundedReceiverStream::new(stream);
-    JsonStream { stream }
+    JsonSeq { stream }
 }
 
 #[derive(Deserialize)]
@@ -117,7 +127,7 @@ async fn join(
     let (tx, stream) = mpsc::unbounded_channel();
     let disconnected = tx.clone();
     let stream = UnboundedReceiverStream::new(stream);
-    let stream = JsonStream { stream };
+    let stream = JsonSeq { stream };
 
     let auth = state.lock().await.join(session_id, tx).await?;
 

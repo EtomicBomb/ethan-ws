@@ -74,7 +74,7 @@ impl GameState {
         }
 
         let cards_down = self.cards_on_table.unwrap();
-
+        
         let order = match (play.kind, cards_down.kind) {
             (PlayKind::Pass, _) => Ordering::Greater,
             (PlayKind::Single(this), PlayKind::Single(other)) => this.cmp(&other),

@@ -22,11 +22,11 @@ use {
 
 const INIT_MESSAGE_CAPACITY: usize = 128;
 
-pub struct JsonStream<S> {
+pub struct JsonSeq<S> {
     pub stream: S,
 }
 
-impl<S, T> IntoResponse for JsonStream<S>
+impl<S, T> IntoResponse for JsonSeq<S>
 where
     S: Stream<Item = T> + Send + 'static,
     T: Serialize,
@@ -37,7 +37,7 @@ where
             Mime::from_str("application/json-seq").unwrap(),
         ));
         headers.typed_insert(CacheControl::new().with_no_cache());
-        let body = body::boxed(JsonStreamBody {
+        let body = body::boxed(JsonSeqBody {
             stream: self.stream,
         });
         (headers, body).into_response()
@@ -45,12 +45,12 @@ where
 }
 
 #[pin_project]
-struct JsonStreamBody<S> {
+struct JsonSeqBody<S> {
     #[pin]
     stream: S,
 }
 
-impl<S, T> Body for JsonStreamBody<S>
+impl<S, T> Body for JsonSeqBody<S>
 where
     S: Stream<Item = T>,
     T: Serialize,

@@ -3,8 +3,10 @@ const $ = document.querySelector.bind(document);
 
 //type Seat = 'north' | 'east' | 'south' | 'west';
 const SEATS = ['north', 'east', 'south', 'west'];
+const relatives = ['my', 'left', 'across', 'right'];
 
 let game;
+
 
 window.addEventListener('load', async (e) => {
     let sessionId = new URL(document.location).searchParams.get('sessionId');
@@ -18,6 +20,7 @@ class Game {
     auth = null;
     items = null;
     seatToRelative = null;
+    progressBars = {};
 
     static async create(sessionId) {
         const url = new URL('/api/join', document.location);
@@ -30,10 +33,11 @@ class Game {
         if (!response.ok) {
             throw new Error('could not connect', { cause: response.text() });
         }
+        const auth = JSON.parse(atob(response.headers.get('Authorization').split(' ')[1]));
         const items = response.body
             .pipeThrough(new TextDecoderStream())
-            .pipeThrough(new TransformStream(new JsonSeqStream()));
-        const auth = JSON.parse(atob(response.headers.get('Authorization').split(' ')[1]));
+            .pipeThrough(new TransformStream(new JsonSeqStream()))
+            .getReader();
         return new Game(auth, items);
     }
 
@@ -41,13 +45,21 @@ class Game {
         this.auth = auth;
         this.items = items;
 
-        const relatives = ['my', 'left', 'across', 'right'];
+
         const offset = SEATS.indexOf(this.auth.seat);
         this.seatToRelative = {};
         for (let i = 0; i<SEATS.length; i++) {
             this.seatToRelative[SEATS[i]] = relatives[(i-offset+4)%relatives.length];
         }
-        console.log('players relative', this.seatToRelative);
+        console.log(this.seatToRelative);
+
+        for (const [seat, relative] of Object.entries(this.seatToRelative)) {
+            $(`.${relative} .name`).textContent = seat;
+        }
+        
+        for (const relative of relatives) {
+            this.progressBars[relative] = new ProgressBar($(`.${relative} .timer`));
+        }
     }
 
     async eventLoop() {
@@ -55,14 +67,16 @@ class Game {
             welcome: this.onWelcome.bind(this),
             host: this.onHost.bind(this),
             connected: this.onConnected.bind(this),
-            username: this.onUsername.bind(this),
             deal: this.onDeal.bind(this),
             play: this.onPlay.bind(this),
             turn: this.onTurn.bind(this),
             disconnected: this.onDisconnected.bind(this),
         };
 
-        for await (const { event, data } of this.items) {
+        for (;;) {
+            const { value, done } = await this.items.read();
+            if (done) break;
+            const { event, data } = value;
             console.log('received', event, data);
             await dispatch[event](data);
         }
@@ -75,10 +89,7 @@ class Game {
         const token = btoa(JSON.stringify(this.auth));
         const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
         body = JSON.stringify(body);
-        const result = await fetch(url, { headers, method, body });
-        if (!result.ok) {
-            $('#error-description').textContent = await result.text();
-        }
+        return await fetch(url, { headers, method, body });
     }
 
     async onWelcome({ seat }) {
@@ -88,39 +99,40 @@ class Game {
             await navigator.clipboard.writeText(linkText);
         });
 
-        $('#my .username').addEventListener('input', async (e) => {
-            const username = e.target.textContent;
-            const response = await this.makeRequest('/api/username', 'PUT', { username });
-        });
-
-        $('#set-action-timer').addEventListener('input', async (e) => {
+        $('#set-timer').addEventListener('input', async (e) => {
             const millis = parseInt(e.target.value, 10);
-            $('#action-timer-value').textContent = `${Math.round(millis/1000)}s`;  
+            $('#timer-value').textContent = `${Math.round(millis/1000)}s`;  
         });
 
         async function updateActionTimer() {
-            const checked = $('#enable-action-timer').checked;
-            const value = parseInt($('#set-action-timer').value, 10);
+            const checked = $('#enable-timer').checked;
+            const value = parseInt($('#set-timer').value, 10);
             const millis = checked ? value : null;
             const response = await this.makeRequest('/api/timer', 'PUT', { millis });
+            if (!response.ok) {
+                $('#error-description').textContent = await response.text();
+            }
         }
-        $('#enable-action-timer').addEventListener('change', updateActionTimer.bind(this));
-        $('#set-action-timer').addEventListener('change', updateActionTimer.bind(this));
+        $('#enable-timer').addEventListener('change', updateActionTimer.bind(this));
+        $('#set-timer').addEventListener('change', updateActionTimer.bind(this));
 
         $('#start-game-button').addEventListener('click', async (e) => {
             const response = await this.makeRequest('/api/start', 'POST', { });
+            if (!response.ok) {
+                $('#error-description').textContent = await response.text();
+            }
         });
 
-        $('#play-cards-button').addEventListener('input', async (e) => {
-            const value = $('#play-cards').value;
-            const cards = value === '' ? [] : value.split(',');
-            const response = await this.makeRequest('/api/playable', 'POST', { cards });
-        });
+        // TODO: every time the card is added, post /api/playable, and style the play button
+        // based on the results
 
-        $('#play-cards-button').addEventListener('click', async (e) => {
-            const value = $('#play-cards').value;
-            const cards = value === '' ? [] : value.split(',');
+        $('.my .play-button').addEventListener('click', async (e) => {
+            const cards = [...document.querySelectorAll('.my .cards .card :checked')]
+                .map(element => element.parentElement.dataset.card);
             const response = await this.makeRequest('/api/play', 'POST', { cards });
+            if (!response.ok) {
+                $('#error-description').textContent = await response.text();
+            }
         });
 
     }
@@ -135,59 +147,124 @@ class Game {
 
     async onConnected({ seat }) {
         const relative = this.seatToRelative[seat];
-        $(`#${relative} .avatar`).textContent = 'human';
-    }
-
-    async onUsername({ seat, username }) {
-        console.log('username', seat, username);
-        const relative = this.seatToRelative[seat];
-        $(`#${relative} .username`).textContent = username;
+        $(`.${relative} .bot`).textContent = 'human';
     }
 
     async onDeal({ cards }) {
         $('#host').style.display = 'none';
         this.cards = cards;
-        $(`#my .cards`).textContent = this.cards;
-        $(`#my .load`).textContent = this.cards.length;
+        for (const relative of relatives) {
+            const cardElements = relative === 'my'  
+                ? this.cards.map(card => createCard(card, this))  
+                : Array(13).fill(null).map(createBlank);
+            $(`.${relative} .cards`).replaceChildren(...cardElements);
+        }
+        $(`.my .load`).textContent = this.cards.length;
     }
 
     async onPlay({ seat, load, cards, pass }) {
         const relative = this.seatToRelative[seat];
-        $(`#${relative} .action-timer .progress`).style.removeProperty('animation');
-        $(`#${relative} .load`).textContent = load;
-        $(`#${relative} .turn`).textContent = '';
-        $(`#${relative} .control`).textContent = '';
+        this.progressBars[relative].stop();
+        $(`.${relative} .load`).textContent = load;
+        $(`.${relative} .turn`).textContent = '';
+        $(`.${relative} .control`).textContent = '';
         if (relative === 'my') {
+            this.updatePlayable();
             this.cards = this.cards.filter(card => !cards.includes(card));
-            $(`#my .cards`).textContent = this.cards;
-            $(`#my .load`).textContent = this.cards.length;
         }
+
         if (pass) {
-            $(`#${relative} .passed`).textContent = 'passed';
+            $(`.${relative} .passed`).textContent = 'passed';
         } else {
-            $(`#table .cards`).textContent = cards;
+            const cardElements = $(`.${relative} .cards`).children;
+            const cardsToMove = relative === 'my'
+                ? [...cardElements].filter(element => cards.includes(element.dataset.card))
+                : chooseRandom([...cardElements], cards.length);
+            // TODO: view transition
+            for (let i=0; i<cards.length; i++) {
+                const element = cardsToMove[i];
+                const card = cards[i];
+                element.remove();
+                element.dataset.card = card;
+            }
+            $(`.table .cards`).replaceChildren(...cardsToMove);
+            $(`.${relative} .load`).textContent = cardElements.length;
         }
+
         if (load === 0) {
-            $(`#${relative} .win`).textContent = 'win';
+            $(`.${relative} .win`).textContent = 'win';
         }
     }
 
     async onTurn({ seat, millis, control }) {
         const relative = this.seatToRelative[seat];
-        $(`#${relative} .turn`).textContent = 'turn';
-        $(`#${relative} .control`).textContent = control ? 'control' : '';
-        $(`#${relative} .passed`).textContent = '';
+        $(`.${relative} .turn`).textContent = 'turn';
+        $(`.${relative} .control`).textContent = control ? 'control' : '';
+        $(`.${relative} .passed`).textContent = '';
         if (millis !== null) {
-            $(`#${relative} .action-timer .progress`).style.animation = `${millis}ms linear 0s action-progress`;
+            this.progressBars[relative].set(millis);
+        }
+        if (relative === 'my') {
+            this.updatePlayable();
         }
     }
 
     async onDisconnected({ seat }) {
-        console.log('disconnected', seat);
         const relative = this.seatToRelative[seat];
-        $(`#${relative} .avatar`).textContent = 'bot';
+        $(`.${relative} .bot`).textContent = 'bot';
     }
 
+    async updatePlayable() {
+        const cards = [...document.querySelectorAll('.my .cards .card :checked')]
+            .map(element => element.parentElement.dataset.card);
+        const response = await this.makeRequest('/api/playable', 'POST', { cards });
+        const button = $('.my .play-button');
+        button.value = cards.length === 0 ? 'pass' : 'play';
+        button.title = await response.text();
+
+        const offTurn = $('.my .turn').innerHTML === ''; 
+        button.classList.toggle('off-turn', offTurn);
+        button.classList.toggle('unplayable', !response.ok && !offTurn);
+    }
+
+}
+
+function chooseRandom(elements, count) {
+    const ret = [];
+    while (ret.length < count) {
+        const index = Math.floor(Math.random(elements.length));
+        ret.push(...elements.splice(index, 1));
+    }
+    return ret;
+}
+
+function createBlank() {
+    const face = document.createElement('img');
+    face.alt = '';
+    face.classList.add('card-face');
+
+    const ret = document.createElement('label');
+    ret.classList.add('card');
+    ret.dataset.card = 'back';
+    ret.replaceChildren(face);
+    return ret;
+}
+
+function createCard(card, game) {
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.classList.add('card-check');
+    check.addEventListener('change', game.updatePlayable.bind(game));
+
+    const face = document.createElement('img');
+    face.alt = '';
+    face.classList.add('card-face');
+
+    const ret = document.createElement('label');
+    ret.classList.add('card');
+    ret.dataset.card = card;
+    ret.replaceChildren(check, face);
+    return ret;
 }
 
 function throttle(period, callback) {
@@ -198,6 +275,44 @@ function throttle(period, callback) {
         last = now;
         await callback(args);
     };
+}
+
+class ProgressBar {
+    start = undefined;
+    duration = 0;
+    id = undefined;
+
+    constructor(wrapper) {
+        this.element = document.createElement('progress');
+        this.element.max = 100;
+        this.element.style.display = 'none';
+        wrapper.replaceChildren(this.element);
+    }
+
+    set(duration) {
+        cancelAnimationFrame(this.id);
+        this.start = undefined;
+        this.duration = duration;
+        this.id = requestAnimationFrame(this.tick.bind(this));
+        this.element.style.display = 'block';
+    }
+
+    tick(now) {
+        if (this.start === undefined) {
+            this.start = now;
+        }
+        const percent = 100 * (now - this.start) / this.duration;
+        this.element.value = percent;
+        this.element.textContent = `${percent}%`;
+        if (now < this.start + this.duration) {
+            this.id = requestAnimationFrame(this.tick.bind(this));
+        }
+    }
+
+    stop() {
+        cancelAnimationFrame(this.id);
+        this.element.style.display = 'none';
+    }
 }
 
 class JsonSeqStream {
@@ -235,13 +350,3 @@ class JsonSeqStream {
         }
     }
 }
-
-//$('#fullscreen').addEventListener('click', async () => {
-//    try {
-//        await document.documentElement
-//            .requestFullscreen({ navigationUI: 'hide' })
-//    } catch (e) {
-//        $('h1').textContent = JSON.stringify(e);
-//        console.log(e);
-//    }
-//});

@@ -236,10 +236,10 @@ impl Card {
     }
 }
 
-const RANKS: [&str; 13] = [
-    "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A", "2",
+const RANKS: [char; 13] = [
+    '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A', '2',
 ];
-const SUITS: [&str; 4] = ["♣", "♠", "♥", "♦"];
+const SUITS: [char; 4] = ['C', 'S', 'H', 'D'];
 
 impl fmt::Display for Card {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -268,16 +268,20 @@ impl FromStr for Card {
     type Err = ToCardError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let rank = s.get(0..1).ok_or(ToCardError)?;
+        let mut elements = s.chars();
+        let rank = elements.next().ok_or(ToCardError)?;
         let rank = RANKS
             .into_iter()
             .position(|r| rank == r)
             .ok_or(ToCardError)? as u8;
-        let suit = s.get(1..).ok_or(ToCardError)?;
+        let suit = elements.next().ok_or(ToCardError)?;
         let suit = SUITS
             .into_iter()
             .position(|s| suit == s)
             .ok_or(ToCardError)? as u8;
+        if elements.next().is_some() {
+            return Err(ToCardError);
+        }
         Ok(Card {
             index: rank * 4 + suit,
         })
@@ -323,15 +327,15 @@ mod tests {
         let three_clubs = cards.next().unwrap();
         assert_eq!(three_clubs, Card::THREE_OF_CLUBS);
         let s = format!("{}", three_clubs);
-        assert_eq!(s, "3♣");
+        assert_eq!(s, "3C");
         let s = serde_json::to_string(&three_clubs).unwrap();
-        assert_eq!(s, "\"3♣\"");
+        assert_eq!(s, "\"3C\"");
 
         let three_spades = cards.next().unwrap();
         let s = format!("{}", three_spades);
-        assert_eq!(s, "3♠");
+        assert_eq!(s, "3S");
         let s = serde_json::to_string(&three_spades).unwrap();
-        assert_eq!(s, "\"3♠\"");
+        assert_eq!(s, "\"3S\"");
     }
 
     #[test]

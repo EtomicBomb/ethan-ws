@@ -1,0 +1,217 @@
+.card {
+    aspect-ratio: 209 / 303;
+}
+
+.card[data-card="back"] .card-face {
+    background-image: url(/assets/cards/back.svg);
+}
+
+.card[data-card="2C"] .card-face {
+    background-image: url(/assets/cards/2C.svg);
+}
+
+.card[data-card="2D"] .card-face {
+    background-image: url(/assets/cards/2D.svg);
+}
+
+.card[data-card="2H"] .card-face {
+    background-image: url(/assets/cards/2H.svg);
+}
+
+.card[data-card="2S"] .card-face {
+    background-image: url(/assets/cards/2S.svg);
+}
+
+.card[data-card="3C"] .card-face {
+    background-image: url(/assets/cards/3C.svg);
+}
+
+.card[data-card="3D"] .card-face {
+    background-image: url(/assets/cards/3D.svg);
+}
+
+.card[data-card="3H"] .card-face {
+    background-image: url(/assets/cards/3H.svg);
+}
+
+.card[data-card="3S"] .card-face {
+    background-image: url(/assets/cards/3S.svg);
+}
+
+.card[data-card="4C"] .card-face {
+    background-image: url(/assets/cards/4C.svg);
+}
+
+.card[data-card="4D"] .card-face {
+    background-image: url(/assets/cards/4D.svg);
+}
+
+.card[data-card="4H"] .card-face {
+    background-image: url(/assets/cards/4H.svg);
+}
+
+.card[data-card="4S"] .card-face {
+    background-image: url(/assets/cards/4S.svg);
+}
+
+.card[data-card="5C"] .card-face {
+    background-image: url(/assets/cards/5C.svg);
+}
+
+.card[data-card="5D"] .card-face {
+    background-image: url(/assets/cards/5D.svg);
+}
+
+.card[data-card="5H"] .card-face {
+    background-image: url(/assets/cards/5H.svg);
+}
+
+.card[data-card="5S"] .card-face {
+    background-image: url(/assets/cards/5S.svg);
+}
+
+.card[data-card="6C"] .card-face {
+    background-image: url(/assets/cards/6C.svg);
+}
+
+.card[data-card="6D"] .card-face {
+    background-image: url(/assets/cards/6D.svg);
+}
+
+.card[data-card="6H"] .card-face {
+    background-image: url(/assets/cards/6H.svg);
+}
+
+.card[data-card="6S"] .card-face {
+    background-image: url(/assets/cards/6S.svg);
+}
+
+.card[data-card="7C"] .card-face {
+    background-image: url(/assets/cards/7C.svg);
+}
+
+.card[data-card="7D"] .card-face {
+    background-image: url(/assets/cards/7D.svg);
+}
+
+.card[data-card="7H"] .card-face {
+    background-image: url(/assets/cards/7H.svg);
+}
+
+.card[data-card="7S"] .card-face {
+    background-image: url(/assets/cards/7S.svg);
+}
+
+.card[data-card="8C"] .card-face {
+    background-image: url(/assets/cards/8C.svg);
+}
+
+.card[data-card="8D"] .card-face {
+    background-image: url(/assets/cards/8D.svg);
+}
+
+.card[data-card="8H"] .card-face {
+    background-image: url(/assets/cards/8H.svg);
+}
+
+.card[data-card="8S"] .card-face {
+    background-image: url(/assets/cards/8S.svg);
+}
+
+.card[data-card="9C"] .card-face {
+    background-image: url(/assets/cards/9C.svg);
+}
+
+.card[data-card="9D"] .card-face {
+    background-image: url(/assets/cards/9D.svg);
+}
+
+.card[data-card="9H"] .card-face {
+    background-image: url(/assets/cards/9H.svg);
+}
+
+.card[data-card="9S"] .card-face {
+    background-image: url(/assets/cards/9S.svg);
+}
+
+.card[data-card="AC"] .card-face {
+    background-image: url(/assets/cards/AC.svg);
+}
+
+.card[data-card="AD"] .card-face {
+    background-image: url(/assets/cards/AD.svg);
+}
+
+.card[data-card="AH"] .card-face {
+    background-image: url(/assets/cards/AH.svg);
+}
+
+.card[data-card="AS"] .card-face {
+    background-image: url(/assets/cards/AS.svg);
+}
+
+.card[data-card="JC"] .card-face {
+    background-image: url(/assets/cards/JC.svg);
+}
+
+.card[data-card="JD"] .card-face {
+    background-image: url(/assets/cards/JD.svg);
+}
+
+.card[data-card="JH"] .card-face {
+    background-image: url(/assets/cards/JH.svg);
+}
+
+.card[data-card="JS"] .card-face {
+    background-image: url(/assets/cards/JS.svg);
+}
+
+.card[data-card="KC"] .card-face {
+    background-image: url(/assets/cards/KC.svg);
+}
+
+.card[data-card="KD"] .card-face {
+    background-image: url(/assets/cards/KD.svg);
+}
+
+.card[data-card="KH"] .card-face {
+    background-image: url(/assets/cards/KH.svg);
+}
+
+.card[data-card="KS"] .card-face {
+    background-image: url(/assets/cards/KS.svg);
+}
+
+.card[data-card="QC"] .card-face {
+    background-image: url(/assets/cards/QC.svg);
+}
+
+.card[data-card="QD"] .card-face {
+    background-image: url(/assets/cards/QD.svg);
+}
+
+.card[data-card="QH"] .card-face {
+    background-image: url(/assets/cards/QH.svg);
+}
+
+.card[data-card="QS"] .card-face {
+    background-image: url(/assets/cards/QS.svg);
+}
+
+.card[data-card="TC"] .card-face {
+    background-image: url(/assets/cards/TC.svg);
+}
+
+.card[data-card="TD"] .card-face {
+    background-image: url(/assets/cards/TD.svg);
+}
+
+.card[data-card="TH"] .card-face {
+    background-image: url(/assets/cards/TH.svg);
+}
+
+.card[data-card="TS"] .card-face {
+    background-image: url(/assets/cards/TS.svg);
+}
+
+

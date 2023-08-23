@@ -70,6 +70,7 @@ class Game {
             deal: this.onDeal.bind(this),
             play: this.onPlay.bind(this),
             turn: this.onTurn.bind(this),
+            win: this.onWin.bind(this),
             disconnected: this.onDisconnected.bind(this),
         };
 
@@ -190,10 +191,6 @@ class Game {
             $(`.table .cards`).replaceChildren(...cardsToMove);
             $(`.${relative} .load`).textContent = cardElements.length;
         }
-
-        if (load === 0) {
-            $(`.${relative} .win`).textContent = 'win';
-        }
     }
 
     async onTurn({ seat, millis, control }) {
@@ -207,6 +204,11 @@ class Game {
         if (relative === 'my') {
             this.updatePlayable();
         }
+    }
+
+    async onWin({ seat }) {
+        const relative = this.seatToRelative[seat];
+        $(`.${relative} .win`).textContent = 'win';
     }
 
     async onDisconnected({ seat }) {

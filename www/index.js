@@ -8,7 +8,7 @@ const relatives = ['my', 'left', 'across', 'right'];
 let game;
 
 window.addEventListener('load', async (e) => {
-    let sessionId = new URL(document.location).searchParams.get('sessionId');
+    const sessionId = new URL(document.location).searchParams.get('sessionId');
     try {
         game = await Game.create(sessionId);
     } catch (e) {

@@ -16,7 +16,7 @@ a {
 }
 
 p {
-    min-width: 10em;
+    min-width: 160px;
 }
 
 #host {
@@ -34,13 +34,13 @@ p {
     overflow: hidden;
     font-size: 16px;
 
-    --perspective: 50em;
+    --perspective: 800px;
     --rx: -25deg;
     --ry: 0deg;
     --rz: 0deg;
-    --tx: 0em;
-    --ty: 5em;
-    --tz: 30em;
+    --tx: 0px;
+    --ty: 80px;
+    --tz: 500px;
 }
 
 body {
@@ -65,8 +65,8 @@ main {
 
 .table {
     position: absolute;
-    width: 10em;
-    height: 10em;
+    width: 160px;
+    height: 160px;
     background-image: linear-gradient(0deg, green, lime);
     transform: 
         rotateX(90deg)
@@ -85,8 +85,8 @@ section {
 }
 
 section.player {
-    max-width: 10em;
-    margin: 2em 1em;
+    max-width: 160px;
+    margin: 32px 16px;
 }
 
 section.table {
@@ -94,19 +94,19 @@ section.table {
 }
 
 section.my {
-    transform: translateY(-3em) rotateY(0deg) translateZ(4em);
+    transform: translateY(-48px) rotateY(0deg) translateZ(60px);
 }
 
 section.left {
-    transform: translateY(-3em) rotateY(270deg) translateZ(4em);
+    transform: translateY(-48px) rotateY(270deg) translateZ(60px);
 }
 
 section.across {
-    transform: translateY(-3em) rotateY(180deg) translateZ(4em);
+    transform: translateY(-48px) rotateY(180deg) translateZ(60px);
 }
 
 section.right {
-    transform: translateY(-3em) rotateY(90deg) translateZ(4em);
+    transform: translateY(-48px) rotateY(90deg) translateZ(60px);
 }
 
 section .cards {
@@ -118,7 +118,7 @@ section .cards {
 .card {
     position: relative;
     display: block;
-    width: 1em;
+    width: 16px;
 }
 
 .card .card-check {
@@ -138,7 +138,7 @@ section .cards {
 }
 
 .my .card .card-check:checked + .card-face {
-    top: -1em;
+    top: -16px;
     box-shadow: 3px 3px orange;
 }
 
@@ -147,13 +147,13 @@ section .cards {
 }
 
 .my .start {
-    width: 2em;
-    height: 2em;
+    width: 32px;
+    height: 32px;
 }
 
 .my .play {
-    width: 2em;
-    height: 2em;
+    width: 32px;
+    height: 32px;
     display: none;
 }
 
@@ -166,8 +166,8 @@ section .cards {
 }
 
 .token {
-    width: 2em;
-    height: 2em;
+    width: 32px;
+    height: 32px;
 }
 
 .token > * {

@@ -113,6 +113,8 @@ struct JoinQuery {
     session_id: Option<SessionId>,
 }
 
+use serde_with::DisplayFromStr;
+
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn join(
     State(state): State<Arc<Mutex<ApiState>>>,
@@ -191,6 +193,11 @@ async fn play(
     phase.human_play(auth.seat, cards).await
 }
 
+struct JoinResponse {
+    auth: Auth,
+    error: Option<Error>,
+}
+
 #[derive(Default)]
 struct ApiState {
     phases: HashMap<SessionId, Arc<Mutex<dyn Phase>>>,
@@ -207,6 +214,23 @@ impl ApiState {
         })
     }
 
+
+//    async fn join(
+//        &mut self,
+//        session_id: Option<SessionId>,
+//        tx: UnboundedSender<Message>,
+//    ) -> Auth {
+//        let retry = match self.try_join(session_id, tx.clone()).await {
+//            Ok(auth) => return auth,
+//            Err(couldnt_join) => couldnt_join,
+//        };
+//
+//        let phase = self.empty_lobby().await;
+//        let auth = phase.lock().await.join(tx, Some(retry)).await
+//            .expect("should always be able to join an empty lobby");
+//        auth
+//    }
+
     async fn join(
         &mut self,
         session_id: Option<SessionId>,
@@ -214,22 +238,24 @@ impl ApiState {
     ) -> Result<Auth> {
         let phase = match session_id {
             Some(session_id) => self.get_phase(session_id).await?,
-            None => {
-                let session_id = SessionId::random();
-                let phase = Lobby::new(session_id, Weak::clone(&self.this));
-                self.transition(session_id, Arc::clone(&phase) as _);
-                phase
-            }
+            None => self.empty_lobby().await,
         };
-        let auth = phase.lock().await.join(tx).await?;
+        let auth = phase.lock().await.join(tx, None).await?;
         Ok(auth)
     }
-
+    
     async fn get_phase(&self, session_id: SessionId) -> Result<Arc<Mutex<dyn Phase>>> {
         let phase = self.phases.get(&session_id).ok_or(Error::NoSession)?;
         Ok(Arc::clone(phase))
     }
 
+    async fn empty_lobby(&mut self) -> Arc<Mutex<dyn Phase>> {
+        let session_id = SessionId::random();
+        let phase = Lobby::new(session_id, Weak::clone(&self.this));
+        self.transition(session_id, Arc::clone(&phase) as _);
+        phase
+    }
+    
     async fn disconnect(&mut self, auth: Auth) {
         // there should be only one thingn in these maps
         let Some(phase) = self.phases.get(&auth.session_id) else { return };
@@ -250,7 +276,7 @@ impl ApiState {
 trait Phase: Send + Sync {
     async fn check_auth(&mut self, auth: Auth) -> Result<()>;
 
-    async fn join(&mut self, _tx: UnboundedSender<Message>) -> Result<Auth> {
+    async fn join(&mut self, _tx: UnboundedSender<Message>, _retry: Option<Error>) -> Result<Auth> {
         Err(Error::BadPhase)
     }
 
@@ -298,10 +324,13 @@ impl Phase for Lobby {
         self.common.check_auth(auth)
     }
 
-    async fn join(&mut self, tx: UnboundedSender<Message>) -> Result<Auth> {
+    async fn join(&mut self, tx: UnboundedSender<Message>, retry: Option<Error>) -> Result<Auth> {
         let auth = self.common.new_user(tx)?;
 
         self.common.message(auth.seat, Message::Welcome {}).await;
+        if let Some(error) = retry {
+            self.common.message(auth.seat, Message::Retry { error }).await;
+        }
         if self.is_host(auth.seat) {
             self.common.message(auth.seat, Message::Host {}).await;
         }
@@ -650,6 +679,10 @@ impl Common {
 #[serde(rename_all = "camelCase")]
 enum Message {
     Welcome {},
+    Retry {
+        #[serde_as(as = "DisplayFromStr")]
+        error: Error,
+    },
     Host {},
     Connected {
         seat: Seat,

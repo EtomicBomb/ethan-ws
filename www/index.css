@@ -35,7 +35,7 @@ p {
     font-size: 16px;
 
     --perspective: 50em;
-    --rx: 0deg;
+    --rx: -25deg;
     --ry: 0deg;
     --rz: 0deg;
     --tx: 0em;
@@ -48,7 +48,6 @@ body {
 }
 
 main {
-/*    font-size: 200px;*/
     position: fixed;
     top: 0;
     left: 0;
@@ -59,10 +58,8 @@ main {
 
     transform-style: preserve-3d;
     transform: 
-/*        translateZ(var(--perspective))*/
         translate3d(var(--tx), var(--ty), var(--tz))
         rotateX(var(--rx)) rotateY(var(--ry)) rotateZ(var(--rz))
-/*        translateZ(calc(-1 * var(--perspective)))*/
     ;
 }
 
@@ -149,7 +146,15 @@ section .cards {
     box-shadow: 3px 3px yellow;
 }
 
-.play-button {
+.my .start {
+    width: 2em;
+    height: 2em;
+}
+
+.my .play {
+    width: 2em;
+    height: 2em;
+    display: none;
 }
 
 .play-button.off-turn {

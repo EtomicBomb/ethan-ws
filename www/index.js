@@ -7,10 +7,14 @@ const relatives = ['my', 'left', 'across', 'right'];
 
 let game;
 
-
 window.addEventListener('load', async (e) => {
     let sessionId = new URL(document.location).searchParams.get('sessionId');
-    game = await Game.create(sessionId);
+    try {
+        game = await Game.create(sessionId);
+    } catch (e) {
+        console.error('failed to create game with provided sessionId', e);
+        game = await Game.create(null);
+    }
     await game.eventLoop();
 });
 
@@ -31,7 +35,7 @@ class Game {
         const headers = { 'Accept': 'application/json-seq' };
         const response = await fetch(url, { method, headers });
         if (!response.ok) {
-            throw new Error('could not connect', { cause: response.text() });
+            throw new Error('failed to join', { cause: await response.text() });
         }
         const auth = JSON.parse(atob(response.headers.get('Authorization').split(' ')[1]));
         const items = response.body
@@ -45,12 +49,16 @@ class Game {
         this.auth = auth;
         this.items = items;
 
+        const sharableURL = new URL(document.location);
+        sharableURL.searchParams.set('sessionId', auth.sessionId);
+        window.history.pushState({}, '', sharableURL);
 
         const offset = SEATS.indexOf(this.auth.seat);
         this.seatToRelative = {};
         for (let i = 0; i<SEATS.length; i++) {
             this.seatToRelative[SEATS[i]] = relatives[(i-offset+4)%relatives.length];
         }
+
         console.log(this.seatToRelative);
 
         for (const [seat, relative] of Object.entries(this.seatToRelative)) {
@@ -64,6 +72,7 @@ class Game {
 
     async eventLoop() {
         const dispatch = {
+            retry: this.onRetry.bind(this),
             welcome: this.onWelcome.bind(this),
             host: this.onHost.bind(this),
             connected: this.onConnected.bind(this),
@@ -93,41 +102,27 @@ class Game {
         return await fetch(url, { headers, method, body });
     }
 
+    async onRetry({ error }) {
+    }
+
     async onWelcome({ seat }) {
 
-        $('#copy-game-link').addEventListener('click', async () => {
-            const linkText = $('#game-link').href;
-            await navigator.clipboard.writeText(linkText);
-        });
-
+        await this.updateActionTimer();
+        $('#enable-timer').addEventListener('change', this.updateActionTimer.bind(this));
+        $('#set-timer').addEventListener('change', this.updateActionTimer.bind(this));
         $('#set-timer').addEventListener('input', async (e) => {
             const millis = parseInt(e.target.value, 10);
             $('#timer-value').textContent = `${Math.round(millis/1000)}s`;  
         });
 
-        async function updateActionTimer() {
-            const checked = $('#enable-timer').checked;
-            const value = parseInt($('#set-timer').value, 10);
-            const millis = checked ? value : null;
-            const response = await this.makeRequest('/api/timer', 'PUT', { millis });
-            if (!response.ok) {
-                $('#error-description').textContent = await response.text();
-            }
-        }
-        $('#enable-timer').addEventListener('change', updateActionTimer.bind(this));
-        $('#set-timer').addEventListener('change', updateActionTimer.bind(this));
-
-        $('#start-game-button').addEventListener('click', async (e) => {
+        $('.my .start').addEventListener('click', async (e) => {
             const response = await this.makeRequest('/api/start', 'POST', { });
             if (!response.ok) {
                 $('#error-description').textContent = await response.text();
             }
         });
 
-        // TODO: every time the card is added, post /api/playable, and style the play button
-        // based on the results
-
-        $('.my .play-button').addEventListener('click', async (e) => {
+        $('.my .play').addEventListener('click', async (e) => {
             const cards = [...document.querySelectorAll('.my .cards .card :checked')]
                 .map(element => element.parentElement.dataset.card);
             const response = await this.makeRequest('/api/play', 'POST', { cards });
@@ -139,11 +134,7 @@ class Game {
     }
 
     async onHost({ }) {
-        const url = new URL(document.location);
-        url.searchParams.set('sessionId', this.auth.sessionId);
-        $('#game-link').textContent = url;
-        $('#game-link').href = url;
-        $('#host').style.display = 'block';
+        $('.my .host-config').style.display = 'block';
     }
 
     async onConnected({ seat }) {
@@ -152,7 +143,10 @@ class Game {
     }
 
     async onDeal({ cards }) {
-        $('#host').style.display = 'none';
+        $('.my .host-config').style.display = 'none';
+        $('.my .start').style.display = 'none';
+        $('.my .play').style.display = 'block';
+
         this.cards = cards;
         for (const relative of relatives) {
             const cardElements = relative === 'my'  
@@ -216,11 +210,22 @@ class Game {
         $(`.${relative} .bot`).textContent = 'bot';
     }
 
+    async updateActionTimer() {
+        const checked = $('#enable-timer').checked;
+        const value = parseInt($('#set-timer').value, 10);
+        $('#set-timer').disabled = !checked;
+        const millis = checked ? value : null;
+        const response = await this.makeRequest('/api/timer', 'PUT', { millis });
+        if (!response.ok) {
+            $('#error-description').textContent = await response.text();
+        }
+    }
+
     async updatePlayable() {
         const cards = [...document.querySelectorAll('.my .cards .card :checked')]
             .map(element => element.parentElement.dataset.card);
         const response = await this.makeRequest('/api/playable', 'POST', { cards });
-        const button = $('.my .play-button');
+        const button = $('.my .play');
         button.value = cards.length === 0 ? 'pass' : 'play';
         button.title = await response.text();
 
@@ -296,7 +301,7 @@ class ProgressBar {
         this.start = undefined;
         this.duration = duration;
         this.id = requestAnimationFrame(this.tick.bind(this));
-        this.element.style.display = 'block';
+        this.element.style.display = null;
     }
 
     tick(now) {

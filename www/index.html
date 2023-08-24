@@ -23,7 +23,7 @@
 <section class="left player">
     <h2 class="name"></h2>
     <div class="cards"></div>
-    <p class="load"></p>
+    <p class="load token"></p>
     <div class="bot token"></div>
     <div class="timer token"></div>
     <div class="turn token"></div>
@@ -35,7 +35,7 @@
 <section class="across player">
     <h2 class="name"></h2>
     <div class="cards"></div>
-    <p class="load"></p>
+    <p class="load token"></p>
     <div class="bot token"></div>
     <div class="timer token"></div>
     <div class="turn token"></div>
@@ -47,7 +47,7 @@
 <section class="right player">
     <h2 class="name"></h2>
     <div class="cards"></div>
-    <p class="load"></p>
+    <p class="load token"></p>
     <div class="bot token"></div>
     <div class="timer token"></div>
     <div class="turn token"></div>
@@ -58,9 +58,18 @@
 
 <section class="my player">
     <h2 class="name"></h2>
+
+    <div class="host-config">
+        <label>enable action timer<input type="checkbox" id="enable-timer" /></label>
+        <input type="range" min="5000" max="120000" value="30000" id="set-timer" />
+        <span id="timer-value"></span>
+    </div>
+
     <div class="cards"></div>
-    <input type="button" class="play-button" value="play" />
-    <p class="load"></p>
+    <input type="button" class="start" value="start" />
+    <input type="button" class="play" value="play" />
+    <p id="error-description"></p>
+    <p class="load token"></p>
     <div class="bot token"></div>
     <div class="timer token"></div>
     <div class="turn token"></div>
@@ -71,24 +80,4 @@
 
 </main>
 
-<header>
-    <fieldset id="host">
-    <legend>host settings</legend>
-    <div>
-        <input type="button" id="copy-game-link" value="🔗" />
-        <a href="" id="game-link"></a>
-    </div>
-    <div>
-        <label>enable action timer<input type="checkbox" id="enable-timer" /></label>
-        <input type="range" min="5000" max="120000" value="30000" id="set-timer" />
-        <span id="timer-value"></span>
-    </div>
-    <div>
-        <input type="button" id="start-game-button" value="start game" />
-    </div>
-    </fieldset>
-
-    <p id="error-description"></p>
-
-</header>
 </body>

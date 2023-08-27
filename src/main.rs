@@ -73,7 +73,7 @@ async fn main() {
         .not_found_service(ServeFile::new("www/not_found.html"))
         .append_index_html_on_directories(true);
 
-    let app = Router::new()
+    let serve = Router::new()
         .nest("/api", serve_api)
         .nest_service("/", serve_static)
         // TODO: deploy
@@ -88,7 +88,7 @@ async fn main() {
 
     //    axum_server::bind_rustls(addr, tls_config)
     axum_server::bind(addr)
-        .serve(app.into_make_service())
+        .serve(serve.into_make_service())
         .await
         .unwrap();
 }
@@ -573,6 +573,7 @@ impl Phase for Win {
     }
 }
 
+#[derive(Debug)]
 struct UserInfo {
     user_secret: UserSecret,
     tx: UnboundedSender<Message>,
@@ -613,6 +614,7 @@ impl Common {
         F: FnOnce(Common) -> T,
         T: Future<Output = Arc<Mutex<dyn Phase>>>,
     {
+        dbg!(&self.user_info, &self.session_id, &self.api_state, &self.seats, &self.host);
         let api_state = self
             .api_state
             .upgrade()
@@ -710,7 +712,7 @@ enum Message {
     },
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Auth {
     seat: Seat,

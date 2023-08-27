@@ -134,7 +134,7 @@ class Game {
     }
 
     async onHost({ }) {
-        $('.my .host-config').style.display = 'block';
+        document.querySelectorAll('.host-config').forEach(elem => elem.style.display = 'unset');
     }
 
     async onConnected({ seat }) {
@@ -143,7 +143,7 @@ class Game {
     }
 
     async onDeal({ cards }) {
-        $('.my .host-config').style.display = 'none';
+        document.querySelectorAll('.host-config').forEach(elem => elem.style.display = 'none');
         $('.my .start').style.display = 'none';
         $('.my .play').style.display = 'block';
 

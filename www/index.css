@@ -11,20 +11,24 @@ html, body, main {
     height: 100%;
 }
 
+h1, h2 {
+    margin: 0;
+}
+
+input {
+    font-size: inherit;
+}
+
 a {
     color: oklch(53% 0.11 230);
 }
 
-p {
-    min-width: 160px;
-}
-
-#host {
+#error-description {
     display: none;
-}
+    position: fixed;
+    left: 0;
+    top: 0;
 
-#setup {
-    display: none; 
 }
 
 :root {
@@ -32,15 +36,16 @@ p {
     box-sizing: border-box;
     color: oklch(39% 0 0);
     overflow: hidden;
-    font-size: 16px;
+    font-size: 160px;
+    text-align: center;
 
     --perspective: 800px;
-    --rx: -25deg;
+    --rx: -45deg;
     --ry: 0deg;
     --rz: 0deg;
     --tx: 0px;
-    --ty: 80px;
-    --tz: 500px;
+    --ty: 200px;
+    --tz: -1600px;
 }
 
 body {
@@ -65,60 +70,69 @@ main {
 
 .table {
     position: absolute;
-    width: 160px;
-    height: 160px;
+    width: 1600px;
+    height: 1600px;
     background-image: linear-gradient(0deg, green, lime);
     transform: 
         rotateX(90deg)
     ;
 }
 
-section {
+section.table {
     transform-style: preserve-3d;
     position: absolute;
 
     display: flex;
     flex-wrap: wrap;
-    flex-direction: row;
+    flex-direction: column;
     justify-content: center;
     align-items: center;
 }
 
 section.player {
-    max-width: 160px;
-    margin: 32px 16px;
+    position: absolute;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+}
+
+section.player .name, section.player .cards {
+    grid-area: auto / span 4;
+}
+
+section.player .token {
+    grid-area: span 1;
 }
 
 section.table {
-
 }
 
 section.my {
-    transform: translateY(-48px) rotateY(0deg) translateZ(60px);
+    transform: translateY(-800px) rotateY(0deg) translateZ(600px) rotateX(35deg) translateZ(400px);
 }
 
 section.left {
-    transform: translateY(-48px) rotateY(270deg) translateZ(60px);
+    transform: translateY(-800px) rotateY(270deg) translateZ(600px) rotateY(135deg) translateZ(-500px) rotateX(15deg);
 }
 
 section.across {
-    transform: translateY(-48px) rotateY(180deg) translateZ(60px);
+    transform: translateY(-800px) rotateY(180deg) translateZ(600px) rotateY(180deg) rotateX(15deg);
 }
 
 section.right {
-    transform: translateY(-48px) rotateY(90deg) translateZ(60px);
+    transform: translateY(-800px) rotateY(90deg) translateZ(600px) rotateY(225deg) translateZ(-500px) rotateX(15deg);
 }
 
 section .cards {
     transform-style: preserve-3d;
     display: flex;
     flex-direction: row;
+    justify-content: center;
 }
 
 .card {
     position: relative;
     display: block;
-    width: 16px;
+    width: 160px;
 }
 
 .card .card-check {
@@ -133,44 +147,49 @@ section .cards {
     width: 100%;
     height: 100%;
     background-color: transparent;
-    background-size: cover;
+    background-size: contain;
     background-repeat: no-repeat;
 }
 
 .my .card .card-check:checked + .card-face {
-    top: -16px;
-    box-shadow: 3px 3px orange;
+    top: -160px;
+    box-shadow: 30px 30px orange;
 }
 
 .my .card .card-face:hover {
-    box-shadow: 3px 3px yellow;
+    box-shadow: 30px 30px yellow;
 }
 
 .my .start {
-    width: 32px;
-    height: 32px;
 }
 
 .my .play {
-    width: 32px;
-    height: 32px;
     display: none;
 }
 
-.play-button.off-turn {
+.my .play.off-turn {
     text-decoration: line-through;
 }
 
-.play-button.unplayable {
+.my .play.unplayable {
     color: red;
 }
 
+.load {
+    margin: 0;
+}
+
 .token {
-    width: 32px;
-    height: 32px;
+    width: 320px;
+    height: 320px;
+    overflow: hidden;
 }
 
 .token > * {
     width: 100%;
     height: 100%;
+}
+
+.host-config {
+    display: none;
 }

@@ -22,10 +22,11 @@ use {
     base64::{engine::general_purpose, Engine as _},
     futures::future::BoxFuture,
     headers::{authorization::Bearer, Authorization, HeaderMapExt},
+    html_node::{html, text},
     http::{header::HeaderValue, request::Parts, status::StatusCode},
     rand::{seq::SliceRandom, thread_rng, Rng},
     serde::{Deserialize, Serialize},
-    serde_with::{serde_as, DurationMilliSeconds, DisplayFromStr},
+    serde_with::{serde_as, DisplayFromStr, DurationMilliSeconds},
     std::{
         collections::HashMap,
         convert::Infallible,
@@ -49,9 +50,7 @@ use {
         set_header::SetResponseHeaderLayer,
     },
     uuid::Uuid,
-    html_node::{html, text},
 };
-
 
 const MAX_ACTION_TIMER: Duration = Duration::from_secs(1000);
 const BOT_ACTION_TIMER: Duration = Duration::from_secs(1);
@@ -199,23 +198,6 @@ impl ApiState {
         })
     }
 
-
-//    async fn join(
-//        &mut self,
-//        session_id: Option<SessionId>,
-//        tx: UnboundedSender<Message>,
-//    ) -> Auth {
-//        let retry = match self.try_join(session_id, tx.clone()).await {
-//            Ok(auth) => return auth,
-//            Err(couldnt_join) => couldnt_join,
-//        };
-//
-//        let phase = self.empty_lobby().await;
-//        let auth = phase.lock().await.join(tx, Some(retry)).await
-//            .expect("should always be able to join an empty lobby");
-//        auth
-//    }
-
     async fn join(
         &mut self,
         session_id: Option<SessionId>,
@@ -228,7 +210,7 @@ impl ApiState {
         let auth = phase.lock().await.join(tx, None).await?;
         Ok(auth)
     }
-    
+
     async fn get_phase(&self, session_id: SessionId) -> Result<Arc<Mutex<dyn Phase>>> {
         let phase = self.phases.get(&session_id).ok_or(Error::NoSession)?;
         Ok(Arc::clone(phase))
@@ -240,13 +222,17 @@ impl ApiState {
         self.transition(session_id, Arc::clone(&phase) as _);
         phase
     }
-    
+
     async fn disconnect(&mut self, auth: Auth) {
         // there should be only one thingn in these maps
-        let Some(phase) = self.phases.get(&auth.session_id) else { return };
+        let Some(phase) = self.phases.get(&auth.session_id) else {
+            return;
+        };
         let phase = Arc::clone(phase);
         let mut phase = phase.lock().await;
-        let Ok(now_empty) = phase.disconnect(auth).await else { return };
+        let Ok(now_empty) = phase.disconnect(auth).await else {
+            return;
+        };
         if now_empty {
             self.phases.remove(&auth.session_id);
         }
@@ -314,7 +300,9 @@ impl Phase for Lobby {
 
         self.common.message(auth.seat, Message::Welcome {}).await;
         if let Some(error) = retry {
-            self.common.message(auth.seat, Message::Retry { error }).await;
+            self.common
+                .message(auth.seat, Message::Retry { error })
+                .await;
         }
         if self.is_host(auth.seat) {
             self.common.message(auth.seat, Message::Host {}).await;
@@ -464,13 +452,19 @@ impl Active {
     // BoxFuture to break recursion
     fn force_play(this: Weak<Mutex<Self>>) -> BoxFuture<'static, ()> {
         Box::pin(async move {
-            let Some(deadline) = this.upgrade() else { return };
-            let Some(deadline) = deadline.lock().await.deadline else { return };
+            let Some(deadline) = this.upgrade() else {
+                return;
+            };
+            let Some(deadline) = deadline.lock().await.deadline else {
+                return;
+            };
             sleep_until(deadline).await;
 
             let Some(this) = this.upgrade() else { return };
             let mut this = this.lock().await;
-            let Some(deadline) = this.deadline else { return };
+            let Some(deadline) = this.deadline else {
+                return;
+            };
             if Instant::now() < deadline {
                 return;
             }
@@ -599,7 +593,13 @@ impl Common {
         F: FnOnce(Common) -> T,
         T: Future<Output = Arc<Mutex<dyn Phase>>>,
     {
-        dbg!(&self.user_info, &self.session_id, &self.api_state, &self.seats, &self.host);
+        dbg!(
+            &self.user_info,
+            &self.session_id,
+            &self.api_state,
+            &self.seats,
+            &self.host
+        );
         let api_state = self
             .api_state
             .upgrade()
@@ -655,7 +655,9 @@ impl Common {
     }
 
     async fn message(&mut self, seat: Seat, message: Message) {
-        let Some(UserInfo { tx, .. }) = self.user_info.get(&seat) else { return };
+        let Some(UserInfo { tx, .. }) = self.user_info.get(&seat) else {
+            return;
+        };
         let _ = tx.send(message);
     }
 }
@@ -705,7 +707,10 @@ struct UserSession {
 #[async_trait]
 impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession {
     type Rejection = Response;
-    async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<Mutex<ApiState>>,
+    ) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(token)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
@@ -716,10 +721,16 @@ impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession {
             .map_err(|_| Error::BadAuthentication.into_response())?;
         let auth: Auth =
             serde_json::from_slice(&token).map_err(|_| Error::BadAuthentication.into_response())?;
-        let phase = state.lock().await.get_phase(auth.session_id).await
+        let phase = state
+            .lock()
+            .await
+            .get_phase(auth.session_id)
+            .await
             .map_err(|err| err.into_response())?;
         let mut phase = phase.lock_owned().await;
-        phase.check_auth(auth).await
+        phase
+            .check_auth(auth)
+            .await
             .map_err(|err| err.into_response())?;
         Ok(UserSession { phase, auth })
     }

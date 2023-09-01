@@ -179,7 +179,9 @@ impl RankBlocks {
 
     fn quadruples(&self) -> Vec<Play> {
         fn helper(block1: &Block, block2: &Block, ret: &mut Vec<Play>) {
-            let Some(quadruple) = block1.quadruples else { return };
+            let Some(quadruple) = block1.quadruples else {
+                return;
+            };
             let ranking_card = quadruple.max().unwrap();
             let kind = PlayKind::Poker(Poker::Quadruple(ranking_card));
 

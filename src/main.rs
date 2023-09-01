@@ -25,7 +25,7 @@ use {
     http::{header::HeaderValue, request::Parts, status::StatusCode},
     rand::{seq::SliceRandom, thread_rng, Rng},
     serde::{Deserialize, Serialize},
-    serde_with::{serde_as, DurationMilliSeconds},
+    serde_with::{serde_as, DurationMilliSeconds, DisplayFromStr},
     std::{
         collections::HashMap,
         convert::Infallible,
@@ -39,7 +39,7 @@ use {
     },
     tokio::{
         sync::mpsc::{self, UnboundedSender},
-        sync::Mutex,
+        sync::{Mutex, OwnedMutexGuard},
         task,
         time::{interval, sleep_until, Instant},
     },
@@ -49,7 +49,9 @@ use {
         set_header::SetResponseHeaderLayer,
     },
     uuid::Uuid,
+    html_node::{html, text},
 };
+
 
 const MAX_ACTION_TIMER: Duration = Duration::from_secs(1000);
 const BOT_ACTION_TIMER: Duration = Duration::from_secs(1);
@@ -113,8 +115,6 @@ struct JoinQuery {
     session_id: Option<SessionId>,
 }
 
-use serde_with::DisplayFromStr;
-
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn join(
     State(state): State<Arc<Mutex<ApiState>>>,
@@ -145,23 +145,16 @@ struct ActionTimerRequest {
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn timer(
-    State(state): State<Arc<Mutex<ApiState>>>,
-    auth: Auth,
+    mut session: UserSession,
     Json(ActionTimerRequest { millis }): Json<ActionTimerRequest>,
 ) -> Result<impl IntoResponse> {
-    let phase = state.lock().await.get_phase(auth.session_id).await?;
-    let mut phase = phase.lock().await;
-    phase.check_auth(auth).await?;
-    phase.timer(auth.seat, millis).await?;
+    session.phase.timer(session.auth.seat, millis).await?;
     Ok(())
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn start(State(state): State<Arc<Mutex<ApiState>>>, auth: Auth) -> Result<impl IntoResponse> {
-    let phase = state.lock().await.get_phase(auth.session_id).await?;
-    let mut phase = phase.lock().await;
-    phase.check_auth(auth).await?;
-    phase.start(auth.seat).await
+async fn start(mut session: UserSession) -> Result<impl IntoResponse> {
+    session.phase.start(session.auth.seat).await
 }
 
 #[derive(Deserialize)]
@@ -171,26 +164,18 @@ struct PlayRequest {
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn playable(
-    State(state): State<Arc<Mutex<ApiState>>>,
-    auth: Auth,
+    mut session: UserSession,
     Json(PlayRequest { cards }): Json<PlayRequest>,
 ) -> Result<impl IntoResponse> {
-    let phase = state.lock().await.get_phase(auth.session_id).await?;
-    let mut phase = phase.lock().await;
-    phase.check_auth(auth).await?;
-    phase.playable(auth.seat, cards).await
+    session.phase.playable(session.auth.seat, cards).await
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn play(
-    State(state): State<Arc<Mutex<ApiState>>>,
-    auth: Auth,
+    mut session: UserSession,
     Json(PlayRequest { cards }): Json<PlayRequest>,
 ) -> Result<impl IntoResponse> {
-    let phase = state.lock().await.get_phase(auth.session_id).await?;
-    let mut phase = phase.lock().await;
-    phase.check_auth(auth).await?;
-    phase.human_play(auth.seat, cards).await
+    session.phase.human_play(session.auth.seat, cards).await
 }
 
 struct JoinResponse {
@@ -712,6 +697,34 @@ enum Message {
     },
 }
 
+struct UserSession {
+    phase: OwnedMutexGuard<dyn Phase>,
+    auth: Auth,
+}
+
+#[async_trait]
+impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession {
+    type Rejection = Response;
+    async fn from_request_parts(parts: &mut Parts, state: &Arc<Mutex<ApiState>>) -> Result<Self, Self::Rejection> {
+        let TypedHeader(Authorization(token)) = parts
+            .extract::<TypedHeader<Authorization<Bearer>>>()
+            .await
+            .map_err(|_err| (Error::BadAuthentication.into_response()))?;
+        let token = token.token();
+        let token = general_purpose::STANDARD
+            .decode(token)
+            .map_err(|_| Error::BadAuthentication.into_response())?;
+        let auth: Auth =
+            serde_json::from_slice(&token).map_err(|_| Error::BadAuthentication.into_response())?;
+        let phase = state.lock().await.get_phase(auth.session_id).await
+            .map_err(|err| err.into_response())?;
+        let mut phase = phase.lock_owned().await;
+        phase.check_auth(auth).await
+            .map_err(|err| err.into_response())?;
+        Ok(UserSession { phase, auth })
+    }
+}
+
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Auth {
@@ -728,27 +741,6 @@ impl IntoResponseParts for Auth {
         res.headers_mut()
             .typed_insert(Authorization::bearer(&auth).unwrap());
         Ok(res)
-    }
-}
-
-#[async_trait]
-impl<S> FromRequestParts<S> for Auth
-where
-    S: Send + Sync,
-{
-    type Rejection = Response;
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let TypedHeader(Authorization(token)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_err| (Error::BadAuthentication.into_response()))?;
-        let token = token.token();
-        let token = general_purpose::STANDARD
-            .decode(token)
-            .map_err(|_| Error::BadAuthentication.into_response())?;
-        let auth =
-            serde_json::from_slice(&token).map_err(|_| Error::BadAuthentication.into_response())?;
-        Ok(auth)
     }
 }
 
@@ -813,7 +805,7 @@ impl fmt::Display for Error {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let status = match self {
-            Error::BadAuthentication => StatusCode::FORBIDDEN,
+            Error::BadAuthentication => StatusCode::UNAUTHORIZED,
             Error::NoSession => StatusCode::BAD_REQUEST,
             Error::Absent => StatusCode::BAD_REQUEST,
             Error::BadPhase => StatusCode::BAD_REQUEST,

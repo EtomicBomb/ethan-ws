@@ -18,6 +18,12 @@ pub struct GameState {
 
 impl Default for GameState {
     fn default() -> GameState {
+        GameState::new()
+    }
+}
+
+impl GameState {
+    fn new() -> GameState {
         let mut deck = Vec::from_iter(Cards::ENTIRE_DECK);
         deck.shuffle(&mut thread_rng());
 
@@ -39,10 +45,9 @@ impl Default for GameState {
             last_player_to_not_pass: current_player,
             winning_player: None,
         }
-    }
-}
 
-impl GameState {
+    }
+
     pub fn valid_plays(&self) -> Vec<Play> {
         Play::all(self.my_hand())
             .into_iter()

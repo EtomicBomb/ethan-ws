@@ -3,6 +3,7 @@
 
 mod game;
 mod json_seq;
+mod hx;
 
 use {
     crate::{
@@ -707,6 +708,7 @@ struct UserSession {
 #[async_trait]
 impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession {
     type Rejection = Response;
+
     async fn from_request_parts(
         parts: &mut Parts,
         state: &Arc<Mutex<ApiState>>,
@@ -721,13 +723,14 @@ impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession {
             .map_err(|_| Error::BadAuthentication.into_response())?;
         let auth: Auth =
             serde_json::from_slice(&token).map_err(|_| Error::BadAuthentication.into_response())?;
-        let phase = state
+        let mut phase = state
             .lock()
             .await
             .get_phase(auth.session_id)
             .await
-            .map_err(|err| err.into_response())?;
-        let mut phase = phase.lock_owned().await;
+            .map_err(|err| err.into_response())?
+            .lock_owned()
+            .await;
         phase
             .check_auth(auth)
             .await

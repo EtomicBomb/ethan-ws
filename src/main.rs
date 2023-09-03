@@ -47,13 +47,16 @@ use {
         time::{interval, sleep_until, Instant},
     },
     tokio_stream::wrappers::UnboundedReceiverStream,
-    tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt},
     tower_http::{
-        LatencyUnit,
         services::{ServeDir, ServeFile},
-        trace::{TraceLayer, DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, DefaultOnBodyChunk, DefaultOnEos},
         set_header::SetResponseHeaderLayer,
+        trace::{
+            DefaultMakeSpan, DefaultOnBodyChunk, DefaultOnEos, DefaultOnRequest, DefaultOnResponse,
+            TraceLayer,
+        },
+        LatencyUnit,
     },
+    tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt},
     uuid::Uuid,
 };
 
@@ -68,22 +71,22 @@ async fn main() {
 
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "pusoy=debug,tower_http=trace,axum::rejection=trace".into()
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "pusoy=debug,tower_http=trace,axum::rejection=trace".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     let serve_api = crate::api::api();
-//    let serve_api = Router::new()
-//        .route("/join", post(join))
-//        .route("/timer", put(timer))
-//        .route("/start", post(start))
-//        .route("/play", post(play))
-//        .route("/playable", post(playable))
-//        .with_state(ApiState::new())
-//        .route("/test", get(test));
+
+    //    let serve_api = Router::new()
+    //        .route("/join", post(join))
+    //        .route("/timer", put(timer))
+    //        .route("/start", post(start))
+    //        .route("/play", post(play))
+    //        .route("/playable", post(playable))
+    //        .with_state(ApiState::new())
+    //        .route("/test", get(test));
 
     let serve_static = ServeDir::new("www")
         .not_found_service(ServeFile::new("www/not_found.html"))
@@ -102,12 +105,9 @@ async fn main() {
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().include_headers(true))
                 .on_request(DefaultOnRequest::new())
-                .on_response(
-                    DefaultOnResponse::new()
-                        .latency_unit(LatencyUnit::Micros)
-                )
+                .on_response(DefaultOnResponse::new().latency_unit(LatencyUnit::Micros))
                 .on_body_chunk(DefaultOnBodyChunk::new())
-                .on_eos(DefaultOnEos::new())
+                .on_eos(DefaultOnEos::new()),
         );
 
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8000));

@@ -183,7 +183,7 @@ impl Seat {
     }
 
     pub fn from_i8(index: i8) -> Self {
-        match (index % 4 + 4) % 4  {
+        match index.rem_euclid(4) {
             0 => Self::North,
             1 => Self::East,
             2 => Self::South,
@@ -192,7 +192,7 @@ impl Seat {
         }
     }
 
-    pub fn from_relative(self, relative: Relative) -> Self {
+    pub fn relative(self, relative: Relative) -> Self {
         Self::from_i8(relative as i8 + self as i8)
     }
 }
@@ -207,9 +207,9 @@ pub enum Relative {
 
 impl Relative {
     pub const ALL: [Self; 4] = [Self::My, Self::Left, Self::Across, Self::Right];
-    
+
     pub fn from_i8(index: i8) -> Self {
-        match (index % 4 + 4) % 4  {
+        match index.rem_euclid(4) {
             0 => Self::My,
             1 => Self::Left,
             2 => Self::Across,
@@ -218,9 +218,9 @@ impl Relative {
         }
     }
 
-    pub fn from_seat(self, seat: Seat) -> Self {
-        Self::from_i8(seat as i8 - self as i8)
-    }
+    //    pub fn relative_seat(self, seat: Seat) -> Self {
+    //        Self::from_i8(seat as i8 - self as i8)
+    //    }
 }
 
 impl Display for Relative {

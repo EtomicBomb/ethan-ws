@@ -1,9 +1,7 @@
 use {
     headers::Header,
+    http::header::{HeaderName, HeaderValue},
     url::Url,
-    http::{
-        header::{HeaderName, HeaderValue},
-    },
 };
 
 macro_rules! uri_header {
@@ -34,7 +32,9 @@ macro_rules! uri_header {
             where
                 E: Extend<HeaderValue>,
             {
-                let Ok(value) = HeaderValue::try_from(self.0.as_str()) else { return };
+                let Ok(value) = HeaderValue::try_from(self.0.as_str()) else {
+                    return;
+                };
                 values.extend(std::iter::once(value));
             }
         }

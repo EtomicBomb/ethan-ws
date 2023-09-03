@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+mod api;
 mod game;
-mod json_seq;
 mod hx;
+mod json_seq;
 
 use {
     crate::{
@@ -46,8 +47,11 @@ use {
         time::{interval, sleep_until, Instant},
     },
     tokio_stream::wrappers::UnboundedReceiverStream,
+    tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt},
     tower_http::{
+        LatencyUnit,
         services::{ServeDir, ServeFile},
+        trace::{TraceLayer, DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, DefaultOnBodyChunk, DefaultOnEos},
         set_header::SetResponseHeaderLayer,
     },
     uuid::Uuid,
@@ -62,28 +66,49 @@ async fn main() {
     //        .await
     //        .unwrap();
 
-    let serve_api = Router::new()
-        .route("/join", post(join))
-        .route("/timer", put(timer))
-        .route("/start", post(start))
-        .route("/play", post(play))
-        .route("/playable", post(playable))
-        .with_state(ApiState::new())
-        .route("/test", get(test));
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "pusoy=debug,tower_http=trace,axum::rejection=trace".into()
+            }),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    let serve_api = crate::api::api();
+//    let serve_api = Router::new()
+//        .route("/join", post(join))
+//        .route("/timer", put(timer))
+//        .route("/start", post(start))
+//        .route("/play", post(play))
+//        .route("/playable", post(playable))
+//        .with_state(ApiState::new())
+//        .route("/test", get(test));
 
     let serve_static = ServeDir::new("www")
         .not_found_service(ServeFile::new("www/not_found.html"))
         .append_index_html_on_directories(true);
 
     let serve = Router::new()
-        .nest("/api", serve_api)
-        .nest_service("/", serve_static)
+        .nest("/", serve_api)
+        .fallback_service(serve_static)
         // TODO: deploy
         // TODO: mark Authorization header as sensitive
         .layer(SetResponseHeaderLayer::overriding(
             http::header::CACHE_CONTROL,
             HeaderValue::from_static("no-store, must-revalidate"),
-        ));
+        ))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().include_headers(true))
+                .on_request(DefaultOnRequest::new())
+                .on_response(
+                    DefaultOnResponse::new()
+                        .latency_unit(LatencyUnit::Micros)
+                )
+                .on_body_chunk(DefaultOnBodyChunk::new())
+                .on_eos(DefaultOnEos::new())
+        );
 
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8000));
     eprintln!("listening on {}", addr);
@@ -176,11 +201,6 @@ async fn play(
     Json(PlayRequest { cards }): Json<PlayRequest>,
 ) -> Result<impl IntoResponse> {
     session.phase.human_play(session.auth.seat, cards).await
-}
-
-struct JoinResponse {
-    auth: Auth,
-    error: Option<Error>,
 }
 
 #[derive(Default)]

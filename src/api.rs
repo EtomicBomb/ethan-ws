@@ -1,9 +1,65 @@
+use {
+    crate::{
+        hx,
+        game::{choose_play, Card, Cards, GameState, PlayError, Seat, Relative},
+        json_seq::JsonSeq,
+    },
+    async_trait::async_trait,
+    axum::{
+        Form,
+        debug_handler,
+        extract::{FromRequestParts, Query, State},
+        response::{IntoResponse, Response, sse::{self, Sse, KeepAlive}},
+        routing::{get, post, put},
+        Json, RequestPartsExt, Router, TypedHeader,
+    },
+    axum_core::response::{IntoResponseParts, ResponseParts},
+    axum_extra::extract::CookieJar,
+    //	axum_server::tls_rustls::RustlsConfig,
+    cookie::{SameSite, Cookie, Expiration},
+    base64::{engine::general_purpose, Engine as _},
+    futures::future::BoxFuture,
+    headers::{authorization::Bearer, Authorization, HeaderMapExt},
+    html_node::{Node, html, text},
+    http::{Uri, header::HeaderValue, request::Parts, status::StatusCode},
+    rand::{seq::SliceRandom, thread_rng, Rng},
+    serde::{Deserialize, Serialize},
+    serde_with::{serde_as, DisplayFromStr, DurationMilliSeconds},
+    std::{
+        collections::HashMap,
+        convert::Infallible,
+        fmt::{self, Display},
+        str::FromStr,
+        future::Future,
+        mem,
+        ops::{ControlFlow, Deref},
+        net::{Ipv4Addr, SocketAddr},
+        sync::Arc,
+        sync::Weak,
+        time::Duration,
+    },
+    tokio::{
+        sync::mpsc::{self, UnboundedSender},
+        sync::{Mutex, OwnedMutexGuard},
+        task,
+        time::{MissedTickBehavior, interval, sleep_until, Instant},
+    },
+    tokio_stream::wrappers::UnboundedReceiverStream,
+    tower_http::{
+        services::{ServeDir, ServeFile},
+        set_header::SetResponseHeaderLayer,
+    },
+    uuid::Uuid,
+};
+
+const BOT_ACTION_TIMER: Duration = Duration::from_secs(1);
 const INACTIVE_BEFORE_DISCONNECT: Duration = Duration::from_secs(2 * 60);
 
 pub fn api<S>() -> Router<S> {
     Router::new()
         .route("/", get(index))
-        .route("/api/join", post(index))
+        .route("/api/test", get(test))
+        .route("/api/join", post(join))
         .route("/api/subscribe", get(subscribe))
         .route("/api/state", get(state))
         .route("/api/keep_alive", post(keep_alive))
@@ -14,102 +70,145 @@ pub fn api<S>() -> Router<S> {
         .with_state(ApiState::new())
 }
 
+#[debug_handler]
+async fn test() -> impl IntoResponse {
+    let (tx, rx) = mpsc::unbounded_channel();
+    task::spawn(async move {
+        let mut interval = interval(Duration::from_millis(1000));
+        for i in 0.. {
+            interval.tick().await;
+            let event = sse::Event::default().json_data(i).unwrap();
+            let event = Ok::<_, Infallible>(event);
+            let Ok(_) = tx.send(event) else { break };
+        }
+    });
+    let rx = UnboundedReceiverStream::new(rx);
+    Sse::new(rx).keep_alive(KeepAlive::default())
+}
+
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn index() -> Result<impl IntoResponse> {
-    Ok(render_index())
+    Ok(html! {
+        <!DOCTYPE html>
+        <html lang="en-US">
+            <head>
+                <title>Pusoy</title>
+                <meta charset="utf-8">
+                <base href=".">
+                <link rel="stylesheet" href="/index.css">
+                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <script src="/assets/htmx-1.9.5.min.js"></script>
+                <script src="/assets/htmx-sse-1.9.5.js"></script>
+            </head>
+            <body>
+                <main hx-post="/api/join" hx-trigger="load" hx-swap="outerHTML"></main>
+            </body>
+        </html>
+    })
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn join(
     State(state): State<Arc<Mutex<ApiState>>>,
-    TypedHeader(hx::CurrentUrl(url)): TypedHeader(hx::CurrentUrl),
+    TypedHeader(hx::CurrentUrl(mut url)): TypedHeader<hx::CurrentUrl>,
 ) -> Result<impl IntoResponse> {
-    let (_, session_id) = url.query_pairs().find(|(k, v)| k == "session_id").map(|(k, v)| v);
-    let session_id = session_id.and_then(|session_id| SessionId::from_str(session_id).ok());
-    let auth = state.lock().await.join(session_id).await?;
-    let new_url = Uri::builder()
-        .path_and_query(format!("/?session_id={}", session_id))
-        .unwrap();
-    Ok((auth, TypedHeader(hx::Push(new_url)), html))
+    let session_id = url.query_pairs().find_map(|(k, v)| (k == "session_id").then_some(v));
+    let session_id = session_id.and_then(|session_id| SessionId::from_str(&*session_id).ok());
+    let (auth, session_id) = state.lock().await.join(session_id).await?;
+
+    url.query_pairs_mut()
+        .clear()
+        .append_pair("session_id", &format!("{}", session_id));
+
+    let html = html! {
+        <main hx-ext="sse" sse-connect="/api/events" hx-trigger="sse:update" hx-get="/api/state" hx-swap="innerHTML">
+        </main>
+    };
+
+    Ok((*auth, TypedHeader(hx::ReplaceUrl(url)), html))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn keep_alive(
-    user_session: UserSession<Authenticated>,
+    mut user_session: UserSession<Authenticated>,
 ) -> Result<impl IntoResponse> {
-    user_session.keep_alive().await?;
+    user_session.session.keep_alive(user_session.auth)
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn subscribe(
-    user_session: UserSession<Authenticated>,
+    mut user_session: UserSession<Authenticated>,
 ) -> Result<impl IntoResponse> {
     let (tx, rx) = mpsc::unbounded_channel();
-    user_session.subscribe(tx).await?;
-    Ok(Sse::new(rx))
+    user_session.session.subscribe(user_session.auth, tx).await?;
+    let rx = UnboundedReceiverStream::new(rx);
+    Ok(Sse::new(rx).keep_alive(KeepAlive::default()))
+            
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn state(
-    user_session: UserSession<Authenticated>,
+    mut user_session: UserSession<Authenticated>,
 ) -> Result<impl IntoResponse> {
-    user_session.state().await
+    user_session.session.state(user_session.auth).await?;
+    Ok(())
 }
 
 #[serde_as]
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct TimerRequest {
-    #[serde_as(as = "Option<DurationMilliSeconds<u64>>")]
+    #[serde_as(as = "DurationMilliSeconds<u64>")]
     timer_value: Duration,
     enable_timer: Option<String>,
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn timer(
-    user_session: UserSession<HostAuthenticated>,
+    mut user_session: UserSession<HostAuthenticated>,
     Form(timer_request): Form<TimerRequest>,
 ) -> Result<impl IntoResponse> {
-    let timer = timer_request.enable_timer.map(|_| timer_value);
-    host_session.timer(timer).await
+    let timer = timer_request.enable_timer.map(|_| timer_request.timer_value);
+    user_session.session.timer(user_session.auth, timer).await
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn start(
-    user_session: UserSession<HostAuthenticated>,
-    Form(timer_request): Form<TimerRequest>,
+    mut user_session: UserSession<HostAuthenticated>,
+    Form(_timer_request): Form<TimerRequest>,
 ) -> Result<impl IntoResponse> {
-    host_session.start().await
-}
-
-#[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn play(
-    user_session: UserSession<Authenticated>,
-    Form(play_request): Form<Vec<(Card, Card)>>,
-) -> Result<impl IntoResponse> {
-    let cards = Cards::from_iter(play_request.into_iter().map(|(card, _)| card));
-    user_session.play(cards).await
+    user_session.session.start(user_session.auth).await
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn playable(
-    user_session: UserSession<Authenticated>,
+    mut user_session: UserSession<Authenticated>,
     Form(play_request): Form<Vec<(Card, Card)>>,
 ) -> Result<impl IntoResponse> {
     let cards = Cards::from_iter(play_request.into_iter().map(|(card, _)| card));
-    user_session.playable(cards).await
+    user_session.session.playable(user_session.auth, cards).await
 }
 
+#[debug_handler(state=Arc<Mutex<ApiState>>)]
+async fn play(
+    mut user_session: UserSession<Authenticated>,
+    Form(play_request): Form<Vec<(Card, Card)>>,
+) -> Result<impl IntoResponse> {
+    let cards = Cards::from_iter(play_request.into_iter().map(|(card, _)| card));
+    user_session.session.human_play(user_session.auth, cards).await
+}
 
 struct ApiState {
-    phases: HashMap<SessionId, Arc<Mutex<Session>>>,
+    sessions: HashMap<SessionId, Arc<Mutex<Session>>>,
+    this: Weak<Mutex<ApiState>>,
 }
 
 impl ApiState {
     fn new() -> Arc<Mutex<Self>> {
-        Arc::new_cyclic(|_this| {
+        Arc::new_cyclic(|this| {
             Mutex::new(Self {
-                phases: HashMap::default(),
+                sessions: HashMap::default(),
+                this: Weak::clone(this),
             })
         })
     }
@@ -117,115 +216,52 @@ impl ApiState {
     async fn join(
         &mut self,
         session_id: Option<SessionId>,
-    ) -> Result<Authenticated> {
-        let (session_id, phase) = match session_id {
+    ) -> Result<(Authenticated, SessionId)> {
+        let (session_id, session) = match session_id {
             Some(session_id) => (session_id, self.get_session(session_id).await?),
             None => {
                 let session_id = SessionId::random();
-                let phase = Lobby::new(session_id, Weak::clone(&self.this));
-                self.phases.insert(session_id, Arc::clone(&phase) as _);
-                (session_id, phase)
+                let session = Session::new(session_id);
+                self.sessions.insert(session_id, Arc::clone(&session));
+                (session_id, session)
             }
         };
 
-        let auth = phase.lock().await.join().await?;
+        let auth = session.lock().await.join().await?;
 
-        let phase = phase.downgrade();
+        let session = Arc::downgrade(&session);
+        let this = Weak::clone(&self.this);
         task::spawn(async move {
             let mut interval = interval(INACTIVE_BEFORE_DISCONNECT);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
             loop {
                 interval.tick().await;
-                let Some(phase) = phase.upgrade() else { break };
-                let mut phase = phase.lock().await;
-                match phase.inactive_disconnect(auth).await {
+                let Some(session) = session.upgrade() else { break };
+                let mut session = session.lock().await;
+                match session.inactive_disconnect(auth).await {
                     ControlFlow::Continue(()) => {},
-                    ControlFlow::Break(now_empty) => {
-                        self.phases.remove(&session_id);
-                        break;
+                    ControlFlow::Break(true) => {
+                        let this = this.upgrade().expect("ApiState should persist the lifetime of the program");
+                        let mut this = this
+                            .lock().await;
+                        this.sessions.remove(&session_id);
+                        break
                     }
+                    ControlFlow::Break(false) => break,
                 }
             }
         });
 
-        Ok(auth)
+        Ok((auth, session_id))
     }
 
     async fn get_session(&self, session_id: SessionId) -> Result<Arc<Mutex<Session>>> {
-        let phase = self.phases.get(&session_id).ok_or(Error::NoSession)?;
-        Ok(Arc::clone(phase))
+        let session = self.sessions.get(&session_id).ok_or(Error::NoSession)?;
+        Ok(Arc::clone(session))
     }
 }
 
-
-struct UserSession<A> {
-    session: OwnedMutexGuard<Session>,
-    auth: A,
-}
-
-#[async_trait]
-impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<HostAuthenticated> {
-    type Rejection = Response;
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<Mutex<ApiState>>,
-    ) -> Result<Self, Self::Rejection> {
-        let UserSession { mut session, auth } = parts
-            .extract::<UserSession<Authenticated>>
-            .await
-            .map_err(|err| err.into_response())?;
-        let auth = session.host_authenticate(auth)
-            .await
-            .map_err(|err| err.into_response())?;
-        Ok(UserSession { session, auth })
-    }
-}
-
-#[async_trait]
-impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<Authenticated> {
-    type Rejection = Response;
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<Mutex<ApiState>>,
-    ) -> Result<Self, Self::Rejection> {
-        let UserSession { mut session, auth } = parts
-            .extract::<UserSession<Unauthenticated>>
-            .await
-            .map_err(|err| err.into_response())?;
-        let auth = phase.authenticate(auth).await
-            .map_err(|err| err.into_response())?;
-        Ok(UserSession { phase, auth })
-    }
-}
-
-#[async_trait]
-impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<Unauthenticated> {
-    type Rejection = Response;
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<Mutex<ApiState>>,
-    ) -> Result<Self, Self::Rejection> {
-        let jar = parts
-            .extract::<CookieJar>()
-            .await
-            .map_err(|err| err.into_response())?;
-        let auth = jar.get("auth")
-            .ok_or_else(|| (StatusCode::UNAUTHORIZED, "no auth cookie found").into_response())?;
-            .value();
-        let auth = serde_json::from_str(auth)
-            .map_err(|err| (StatusCode::UNAUTHORIZED, format!("{}", err)).into_response())?;
-        let mut phase = state
-            .lock()
-            .await
-            .get_session(auth.session_id)
-            .await
-            .map_err(|err| err.into_response())?
-            .lock_owned()
-            .await;
-        Ok(UserSession { phase, auth })
-    }
-}
 
 struct Session {
     timer: Option<Duration>,
@@ -242,11 +278,12 @@ impl Session {
         Arc::new_cyclic(move |this| Mutex::new(Self {
             timer: None,
             deadline: None,
+            phase: Phase::Lobby,
             game_state: GameState::new(),
             humans: HashMap::default(),
             session_id,
-            this,
-        })
+            this: Weak::clone(this),
+        }))
     }
 
     pub async fn join(&mut self) -> Result<Authenticated> {
@@ -272,15 +309,15 @@ impl Session {
         })
     }
 
-    pub fn inactive_disconnect(&mut self, auth: Authenticated) -> ControlFlow<(), bool> {
-        let Some(human) = self.humans.get_mut(&auth.seat) else { ControlFlow::Break(()) };
-        let is_active = Instant::now().elapsed(human.last_active) < INACTIVE_BEFORE_DISCONNECT;
+    pub async fn inactive_disconnect(&mut self, auth: Authenticated) -> ControlFlow<bool> {
+        let Some(human) = self.humans.get_mut(&auth.seat) else { return ControlFlow::Break(false) };
+        let is_active = Instant::now().duration_since(human.last_active) < INACTIVE_BEFORE_DISCONNECT;
         if is_active {
             return ControlFlow::Continue(());
         } 
         if human.host {
             let new_host = self.humans.values_mut().next();
-            if let Some(new_host) {
+            if let Some(new_host) = new_host {
                 new_host.host = true;
             }
         }
@@ -292,25 +329,29 @@ impl Session {
                 self.solicit().await;
             }
         }
-        Ok(now_empty)
+        ControlFlow::Break(now_empty)
     }
 
-    pub fn last_active(&mut self, auth: Authenticated) -> Result<()> {
+    pub fn keep_alive(&mut self, auth: Authenticated) -> Result<()> {
         self.humans.get_mut(&auth.seat).ok_or(Error::Absent)?.last_active = Instant::now();
-    }
-
-    pub async fn subscribe(&mut self, auth: Authenticated, tx: Tx) -> Result<()> {
-        self.humans.get_mut(&auth.seat).ok_or(Error::Absent)?.tx = tx;
-        todo!("send update message");
         Ok(())
     }
 
+    pub async fn subscribe(&mut self, auth: Authenticated, tx: Tx) -> Result<()> {
+        self.humans.get_mut(&auth.seat).ok_or(Error::Absent)?.tx = Some(tx);
+        self.alert(auth.seat, &Update::Deal).await;
+        Ok(())
+    }
+
+    pub fn is_host(&self, seat: Seat) -> bool {
+        self.humans.get(&seat).is_some_and(|human| human.host)
+
+    }
     pub fn host_authenticate(&mut self, auth: Authenticated) -> Result<HostAuthenticated> {
-        let is_host = self.humans.get(&auth.seat).is_some_and(|human| human.host);
-        if !is_host {
+        if !self.is_host(auth.seat) {
             return Err(Error::NotHost);
         }
-        Ok(HostAuthenticated { auth: auth.auth })
+        Ok(HostAuthenticated { auth })
     }
 
     pub fn authenticate(&mut self, auth: Unauthenticated) -> Result<Authenticated> {
@@ -321,7 +362,87 @@ impl Session {
         Ok(Authenticated { auth })
     }
 
-    pub async fn timer(&mut self, auth: HostAuthenticated, timer: Option<Duration>) -> Result<()> {
+    pub async fn state(&mut self, auth: Authenticated) -> Result<Node> {
+        fn render_card(card: Card) -> Node {
+            let card = format!("{}", card);
+            html! {
+                <label class="card" data-card={&card} id={&card}>
+                    <input type="checkbox" name={&card} hx-get="/api/playable" hx-trigger="change">
+                    <img src={format!("/assets/cards/{card}.svg")} alt="" class="card-face">
+                </label>
+            }
+        }
+
+        Ok(html! {
+            <img class="table" alt="" />
+            <section class="table">
+            <div class="cards"></div>
+            </section>
+            { Relative::ALL
+                .into_iter()
+                .map(|relative| {
+
+                    let seat = auth.seat.from_relative(relative);
+                    let is_hosting = self.is_host(seat);
+                    let my_player = seat == auth.seat;
+
+                    let host_controls = if my_player && is_hosting { 
+                        html! {
+                            <form hx-put="/api/timer">
+                                <label class="host-config">
+                                    "enable action timer"
+                                    <input type="checkbox" name="enable-timer" hx-trigger="change" />
+                                </label>
+                                <input type="range" min="1" max="120000" value="30000" id="set-timer" name="timer-value" hx-trigger="change" />
+                            </form>
+                            <button hx-post="/api/start">"start the game"</button>
+                        }
+                    } else { 
+                        html! { <div>"no host controls"</div> } 
+                    };
+
+                    let cards_form = if my_player {
+                        let cards = self.game_state.hand(seat);
+                        html! {
+                            <form>
+                                { cards.into_iter()
+                                    .map(|card| render_card(card)) 
+                                }
+                                <button type="submit" hx-post="/api/play">"Play"</button>
+                            </form>
+                        }
+                    } else {
+                        html! { <div>"no cards form"</div> } 
+                    };
+
+                    html! {
+                        <section class=format!("{}", relative)>
+                            <h2 class="name">
+                            { host_controls }
+                            </h2>
+                            <div class="load">
+                            </div>
+                            <div class="bot">
+                            </div>
+                            <div class="timer">
+                            </div>
+                            <div class="turn">
+                            </div>
+                            <div class="passed">
+                            </div>
+                            <div class="control">
+                            </div>
+                            <div class="win">
+                            </div>
+                            { cards_form }
+                        </section>
+                    }
+                })
+            }
+        })
+    }
+
+    pub async fn timer(&mut self, _auth: HostAuthenticated, timer: Option<Duration>) -> Result<()> {
         if !matches!(self.phase, Phase::Lobby) {
             return Err(Error::BadPhase);
         }
@@ -330,7 +451,7 @@ impl Session {
         Ok(())
     }
 
-    pub async fn start(&mut self, auth: HostAuthenticated) -> Result<()> {
+    pub async fn start(&mut self, _auth: HostAuthenticated) -> Result<()> {
         if !matches!(self.phase, Phase::Lobby) {
             return Err(Error::BadPhase);
         }
@@ -361,27 +482,19 @@ impl Session {
         if auth.seat != current_player {
             return Err(Error::NotCurrent);
         }
-        self.play(auth, cards).await?;
+        self.play(cards).await?;
         Ok(())
     }
 
-    async fn auto_play(&mut self) {
-        let current_player = self.game_state.current_player();
-        let cards = choose_play(&self.game_state).cards;
-        self.play(current_player, cards)
-            .await
-            .expect("our bots should always choose valid plays");
-    }
-
-    async fn play(&mut self, auth: Authenticated, cards: Cards) -> Result<()> {
-        let play = self.game_state.play(cards)?;
-        let pass = play.is_pass();
-        let load = self.game_state.hand(auth.seat).len();
-        let win = load == 0;
+    async fn play(&mut self, cards: Cards) -> Result<()> {
+        assert_eq!(self.phase, Phase::Active);
+        self.game_state.play(cards)?;
         self.alert_all(&Update::Play).await;
 
+        let win = self.game_state.winning_player().is_some();
         if win {
-            self.win(auth.seat).await;
+            self.phase = Phase::Post;
+            self.alert_all(&Update::Win).await;
         } else {
             self.solicit().await;
         }
@@ -419,18 +532,21 @@ impl Session {
                 return;
             }
             // TODO: can choose a worse bot here if we're forcing a human player
-            this.auto_play().await;
+            if !matches!(this.phase, Phase::Active) { return }
+            let cards = choose_play(&this.game_state).cards;
+            this.play(cards)
+                .await
+                .expect("our bots should always choose valid plays");
         })
     }
 
     async fn alert(&self, seat: Seat, message: &Update) {
-        let Some(tx) = self.humans.get(&seat).and_then(|human| &human.tx) else { return };
-        let data = html! { <div></div> };
+        let Some(tx) = self.humans.get(&seat).and_then(|human| human.tx.as_ref()) else { return };
+        let data = html! { <div>{text!("{}", message)}</div> };
         let event = sse::Event::default()
             .data(data.to_string())
-            .event("refresh")
-            .keep_alive(KeepAlive::default());
-        tx.send(Ok(event));
+            .event("update"); // TODO: change
+        let _ = tx.send(Ok(event));
     }
 
     async fn alert_all(&mut self, message: &Update) {
@@ -444,6 +560,7 @@ impl Session {
     }
 }
 
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 enum Phase {
     Lobby,
     Active,
@@ -453,6 +570,7 @@ enum Phase {
 struct Human {
     user_secret: UserSecret, 
     last_active: Instant,
+    host: bool,
     tx: Option<Tx>,
 }
 
@@ -463,50 +581,93 @@ enum Update {
     All,
     Welcome,
     Deal,
+    Turn,
     Host,
     Connected,
-    Deal,
     Play,
-    Solicit,
     Win,
 }
 
 impl Display for Update {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Update::All => write!(f, "all"),
-            Update::Welcome => write!(f, "welcome"),
-            Update::Host => write!(f, "host"),
-            Update::Connected => write!(f, "connected"),
-            Update::Deal => write!(f, "deal"),
-            Update::Play => write!(f, "play"),
-            Update::Solicit => write!(f, "solicit"),
-            Update::Win => write!(f, "win"),
+            Self::All => write!(f, "all"),
+            Self::Welcome => write!(f, "welcome"),
+            Self::Host => write!(f, "host"),
+            Self::Connected => write!(f, "connected"),
+            Self::Deal => write!(f, "deal"),
+            Self::Play => write!(f, "play"),
+            Self::Turn => write!(f, "solicit"),
+            Self::Win => write!(f, "win"),
         }
     }
 }
 
-enum Relative {
-    My,
-    Left,
-    Across,
-    Right,
+
+struct UserSession<A> {
+    session: OwnedMutexGuard<Session>,
+    auth: A,
 }
 
-impl Relative {
-    const ALL: [Relative; 4] = [Relative::My, Relative::Left, Relative::Across, Relative::Right];
-    
-    fn from_i8(index: i8) -> Self {
-        match (index % 4 + 4) % 4  {
-            Relative::My => 0,
-            Relative::Left => 1,
-            Relative::Across => 2,
-            Relative::Right => 3,
-        }
+#[async_trait]
+impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<HostAuthenticated> {
+    type Rejection = Response;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<Mutex<ApiState>>,
+    ) -> Result<Self, Self::Rejection> {
+        let UserSession { mut session, auth } = parts
+            .extract_with_state::<UserSession<Authenticated>, Arc<Mutex<ApiState>>>(state)
+            .await
+            .map_err(|err| err.into_response())?;
+        let auth = session.host_authenticate(auth)
+            .map_err(|err| err.into_response())?;
+        Ok(UserSession { session, auth })
     }
+}
 
-    fn from_seat(my: Seat, other: Seat) -> Self {
-        Relative::from_i8(other as i8 - self as i8)
+#[async_trait]
+impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<Authenticated> {
+    type Rejection = Response;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<Mutex<ApiState>>,
+    ) -> Result<Self, Self::Rejection> {
+        let UserSession { mut session, auth } = parts
+            .extract_with_state::<UserSession<Unauthenticated>, Arc<Mutex<ApiState>>>(state)
+            .await
+            .map_err(|err| err.into_response())?;
+        let auth = session.authenticate(auth)
+            .map_err(|err| err.into_response())?;
+        Ok(UserSession { session, auth })
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<Unauthenticated> {
+    type Rejection = Response;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<Mutex<ApiState>>,
+    ) -> Result<Self, Self::Rejection> {
+        let jar = parts
+            .extract::<CookieJar>()
+            .await
+            .map_err(|err| err.into_response())?;
+        let auth = jar.get("auth")
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, "no auth cookie found").into_response())?
+            .value();
+        let auth: Unauthenticated = serde_json::from_str(auth)
+            .map_err(|err| (StatusCode::UNAUTHORIZED, format!("{}", err)).into_response())?;
+        let session = state
+            .lock()
+            .await
+            .get_session(auth.session_id)
+            .await
+            .map_err(|err| err.into_response())?
+            .lock_owned()
+            .await;
+        Ok(UserSession { session, auth })
     }
 }
 
@@ -533,7 +694,7 @@ struct Authenticated {
     auth: Unauthenticated,
 }
 
-impl Deref for HostAuthenticated {
+impl Deref for Authenticated {
     type Target = Unauthenticated;
     fn deref(&self) -> &Self::Target {
         &self.auth
@@ -549,15 +710,15 @@ struct Unauthenticated {
 
 impl IntoResponseParts for Unauthenticated {
     type Error = Infallible;
-    fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
+    fn into_response_parts(self, res: ResponseParts) -> Result<ResponseParts, Self::Error> {
         let auth = serde_json::to_string(&self).unwrap();
         let mut cookie = Cookie::new("auth", auth);
         cookie.set_secure(Some(true));
         cookie.set_http_only(Some(true));
         cookie.set_same_site(Some(SameSite::Strict));
-        cookie.set_expires(Some(Expires::Session));
+        cookie.set_expires(Expiration::Session);
         let jar = CookieJar::new().add(cookie);
-        Ok(jar)
+        Ok(jar.into_response_parts(res)?)
     }
 }
 
@@ -573,7 +734,7 @@ where
             .await
             .map_err(|err| err.into_response())?;
         let auth = jar.get("auth")
-            .ok_or_else(|| (StatusCode::UNAUTHORIZED, "no auth cookie found").into_response())?;
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, "no auth cookie found").into_response())?
             .value();
         let auth = serde_json::from_str(auth)
             .map_err(|err| (StatusCode::UNAUTHORIZED, format!("{}", err)).into_response())?;
@@ -592,10 +753,16 @@ impl SessionId {
     }
 }
 
+impl Display for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl FromStr for SessionId {
     type Err = uuid::Error;
     fn from_str(string: &str) -> Result<Self, Self::Err> {
-        Uuid::from_str(string)
+        Ok(Self(Uuid::from_str(string)?))
     }
 }
 
@@ -626,21 +793,21 @@ enum Error {
 
 impl From<PlayError> for Error {
     fn from(error: PlayError) -> Error {
-        Error::PlayError(error)
+        Self::PlayError(error)
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::BadAuthentication => write!(f, "authentication not valid for the player"),
-            Error::NoSession => write!(f, "request session not found"),
-            Error::Absent => write!(f, "player must be present in the game"),
-            Error::BadPhase => write!(f, "request must be applicable to current game phase"),
-            Error::NotHost => write!(f, "requests must have from host"),
-            Error::Full => write!(f, "can only join sessions that aren't full"),
-            Error::NotCurrent => write!(f, "this request should be made by the current player"),
-            Error::PlayError(error) => write!(f, "{}", error),
+            Self::BadAuthentication => write!(f, "authentication not valid for the player"),
+            Self::NoSession => write!(f, "request session not found"),
+            Self::Absent => write!(f, "player must be present in the game"),
+            Self::BadPhase => write!(f, "request must be applicable to current phase"),
+            Self::NotHost => write!(f, "requests must have from host&"),
+            Self::Full => write!(f, "can only join sessions that aren't full"),
+            Self::NotCurrent => write!(f, "this request should be made by the current player"),
+            Self::PlayError(error) => write!(f, "{}", error),
         }
     }
 }
@@ -648,119 +815,17 @@ impl fmt::Display for Error {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let status = match self {
-            Error::BadAuthentication => StatusCode::UNAUTHORIZED,
-            Error::NoSession => StatusCode::BAD_REQUEST,
-            Error::Absent => StatusCode::BAD_REQUEST,
-            Error::BadPhase => StatusCode::BAD_REQUEST,
-            Error::NotHost => StatusCode::FORBIDDEN,
-            Error::Full => StatusCode::BAD_REQUEST,
-            Error::NotCurrent => StatusCode::BAD_REQUEST,
-            Error::PlayError(..) => StatusCode::BAD_REQUEST,
+            Self::BadAuthentication => StatusCode::UNAUTHORIZED,
+            Self::NoSession => StatusCode::BAD_REQUEST,
+            Self::Absent => StatusCode::BAD_REQUEST,
+            Self::BadPhase => StatusCode::BAD_REQUEST,
+            Self::NotHost => StatusCode::FORBIDDEN,
+            Self::Full => StatusCode::BAD_REQUEST,
+            Self::NotCurrent => StatusCode::BAD_REQUEST,
+            Self::PlayError(..) => StatusCode::BAD_REQUEST,
         };
         let body = self.to_string();
         (status, body).into_response()
     }
 }
 
-fn render_index() -> Node {
-    html! {
-        <!DOCTYPE html>
-        <html lang="en-US">
-        <head>
-            <title>Pusoy</title>
-            <meta charset="utf-8">
-            <base href=".">
-            <link rel="stylesheet" href="/index.css">
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <script src="/assets/htmx-1.9.5.min.js"></script>
-            <script src="/assets/htmx-sse-1.9.5.js"></script>
-        </head>
-        <body>
-            <main hx-post="/api/join" hx-trigger="load" hx-swap="outerHTML"></main>
-        </body>
-    }
-}
-
-
-fn render_main() -> Node {
-    html! {
-        <main hx-ext="sse" sse-connect="/api/events" hx-trigger="sse:update" hx-get="/api/state" hx-swap="innerHTML">
-        </main>
-    }
-}
-
-fn render_main_inner() -> Node {
-    html! {
-        <img class="table" alt="" />
-        <section class="table">
-        <div class="cards"></div>
-        </section>
-        { Relative::ALL
-                .into_iter()
-                .map(|relative| render_player(relative))
-        }
-    }
-}
-
-fn render_player(relative: Relative) -> Node {
-    let is_hosting = todo!();
-    let my_player = relative == Relative::My;
-
-    html! {
-        <section class="{} player">
-            <h2 class="name">
-            { if my_player && is_hosting { render_host_controls() } else { html! {} } }
-            </h2>
-            <div class="load">
-            </div>
-            <div class="bot">
-            </div>
-            <div class="timer">
-            </div>
-            <div class="turn">
-            </div>
-            <div class="passed">
-            </div>
-            <div class="control">
-            </div>
-            <div class="win">
-            </div>
-            { if my_player { render_cards_form() } else { html! {} } }
-        </section>
-    }
-}
-
-fn render_host_controls() -> Node {
-    html! {
-        <form hx-put="/api/timer">
-            <label class="host-config">
-                "enable action timer"
-                <input type="checkbox" name="enable-timer" hx-trigger="change" />
-            </label>
-            <input type="range" min="1" max="120000" value="30000" id="set-timer" name="timer-value" hx-trigger="change" />
-        </form>
-        <button hx-post="/api/start">start the game</button>
-    }
-}
-
-fn render_cards_form(cards: Cards) -> Node {
-//    self.game_state.hand(seat)
-    html! {
-        <form>
-            { cards.into_iter()
-                .map(|card| render_card(card)) 
-            }
-            <button type="submit" hx-post="/api/play">Play</button>
-        </form>
-    }
-}
-
-fn render_card(card: Card) -> Node {
-    let card = format!("{card}");
-    html! {
-        <label class="card" data-card={&card} id={&card}>
-            <input type="checkbox" name={&card} hx-get="/api/playable" hx-trigger="change">
-            <img src={format!("/assets/cards/{card}.svg")} alt="" class="card-face">
-        </label>
-    }
-}

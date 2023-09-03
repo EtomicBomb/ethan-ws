@@ -1,14 +1,14 @@
 use {
+    headers::Header,
+    url::Url,
     http::{
-        uri::Uri,
         header::{HeaderName, HeaderValue},
     },
-    headers::Header,
 };
 
 macro_rules! uri_header {
     ($ident:ident, $name:expr) => {
-        pub struct $ident(pub Uri);
+        pub struct $ident(pub Url);
 
         impl Header for $ident {
             fn name() -> &'static HeaderName {
@@ -23,8 +23,9 @@ macro_rules! uri_header {
                 let value = values
                     .last()
                     .ok_or_else(headers::Error::invalid)?
-                    .as_bytes()
-                    .try_into()
+                    .to_str()
+                    .map_err(|_| headers::Error::invalid())?
+                    .parse()
                     .map_err(|_| headers::Error::invalid())?;
                 Ok(Self(value))
             }
@@ -33,7 +34,7 @@ macro_rules! uri_header {
             where
                 E: Extend<HeaderValue>,
             {
-                let value = HeaderValue::try_from(self.0.to_string()).unwrap();
+                let Ok(value) = HeaderValue::try_from(self.0.as_str()) else { return };
                 values.extend(std::iter::once(value));
             }
         }
@@ -54,9 +55,7 @@ macro_rules! presence_header {
             where
                 I: Iterator<Item = &'i HeaderValue>,
             {
-                let value = values
-                    .last()
-                    .ok_or_else(headers::Error::invalid)?;
+                let value = values.last().ok_or_else(headers::Error::invalid)?;
                 if value != "true" {
                     return Err(headers::Error::invalid());
                 }
@@ -75,21 +74,27 @@ macro_rules! presence_header {
     };
 }
 
+pub struct UserInput;
+
+pub struct HtmlElementName;
+
+pub struct HtmlElementId;
+
 presence_header!(Boosted, "hx-boosted");
 
 uri_header!(CurrentUrl, "hx-current-url");
 
 presence_header!(HistoryRestoreRequest, "hx-history-restore-request");
 
-pub struct Prompt(pub HeaderValue);
+pub struct Prompt(pub UserInput);
 
 presence_header!(Request, "hx-request");
 
-pub struct Target(pub HeaderValue);
+pub struct Target(pub HtmlElementId);
 
-pub struct TriggerName(pub HeaderValue);
+pub struct TriggerName(pub HtmlElementName);
 
-pub struct TriggerRequest(pub HeaderValue);
+pub struct TriggerRequest(pub HtmlElementId);
 
 uri_header!(Location, "hx-location");
 
@@ -112,4 +117,3 @@ pub struct TriggerResponse(pub HeaderValue);
 pub struct TriggerAfterSettle(pub HeaderValue);
 
 pub struct TriggerAfterSwap(pub HeaderValue);
-

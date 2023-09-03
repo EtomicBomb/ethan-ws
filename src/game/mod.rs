@@ -6,4 +6,4 @@ mod state;
 pub use bot::choose_play;
 pub use cards::{Card, Cards};
 pub use plays::{Play, PlayKind};
-pub use state::{GameState, PlayError, Seat};
+pub use state::{GameState, PlayError, Seat, Relative};

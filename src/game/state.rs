@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::SerializeDisplay;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self, Display};
 
 #[derive(Debug)]
 pub struct GameState {
@@ -23,7 +23,7 @@ impl Default for GameState {
 }
 
 impl GameState {
-    fn new() -> GameState {
+    pub fn new() -> GameState {
         let mut deck = Vec::from_iter(Cards::ENTIRE_DECK);
         deck.shuffle(&mut thread_rng());
 
@@ -45,7 +45,6 @@ impl GameState {
             last_player_to_not_pass: current_player,
             winning_player: None,
         }
-
     }
 
     pub fn valid_plays(&self) -> Vec<Play> {
@@ -115,6 +114,10 @@ impl GameState {
         Ok(play)
     }
 
+    pub fn winning_player(&self) -> Option<Seat> {
+        self.winning_player
+    }
+
     pub fn has_control(&self) -> bool {
         self.last_player_to_not_pass == self.current_player
     }
@@ -173,14 +176,60 @@ pub enum Seat {
 }
 
 impl Seat {
-    pub const ALL: [Seat; 4] = [Seat::North, Seat::East, Seat::South, Seat::West];
+    pub const ALL: [Self; 4] = [Self::North, Self::East, Self::South, Self::West];
 
-    pub fn next(self) -> Seat {
+    pub fn next(self) -> Self {
+        Self::from_i8(self as i8 + 1)
+    }
+
+    pub fn from_i8(index: i8) -> Self {
+        match (index % 4 + 4) % 4  {
+            0 => Self::North,
+            1 => Self::East,
+            2 => Self::South,
+            3 => Self::West,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn from_relative(self, relative: Relative) -> Self {
+        Self::from_i8(relative as i8 + self as i8)
+    }
+}
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+pub enum Relative {
+    My,
+    Left,
+    Across,
+    Right,
+}
+
+impl Relative {
+    pub const ALL: [Self; 4] = [Self::My, Self::Left, Self::Across, Self::Right];
+    
+    pub fn from_i8(index: i8) -> Self {
+        match (index % 4 + 4) % 4  {
+            0 => Self::My,
+            1 => Self::Left,
+            2 => Self::Across,
+            3 => Self::Right,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn from_seat(self, seat: Seat) -> Self {
+        Self::from_i8(seat as i8 - self as i8)
+    }
+}
+
+impl Display for Relative {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Seat::North => Seat::East,
-            Seat::East => Seat::South,
-            Seat::South => Seat::West,
-            Seat::West => Seat::North,
+            Self::My => write!(f, "my"),
+            Self::Left => write!(f, "left"),
+            Self::Across => write!(f, "across"),
+            Self::Right => write!(f, "right"),
         }
     }
 }

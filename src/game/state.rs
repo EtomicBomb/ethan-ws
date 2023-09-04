@@ -218,20 +218,6 @@ pub enum Relative {
 
 impl Relative {
     pub const ALL: [Self; 4] = [Self::My, Self::Left, Self::Across, Self::Right];
-
-    pub fn from_i8(index: i8) -> Self {
-        match index.rem_euclid(4) {
-            0 => Self::My,
-            1 => Self::Left,
-            2 => Self::Across,
-            3 => Self::Right,
-            _ => unreachable!(),
-        }
-    }
-
-    //    pub fn relative_seat(self, seat: Seat) -> Self {
-    //        Self::from_i8(seat as i8 - self as i8)
-    //    }
 }
 
 impl Display for Relative {

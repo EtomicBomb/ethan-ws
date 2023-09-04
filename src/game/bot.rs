@@ -14,19 +14,21 @@ struct SafeGameInterface<'a> {
 }
 
 impl<'a> SafeGameInterface<'a> {
-    fn my_hand(&self) -> Cards {
-        self.game.my_hand()
-    }
 
-    fn cards_on_table(&self) -> Option<Play> {
-        self.game.cards_on_table()
-    }
+//    fn my_hand(&self) -> Cards {
+//        self.game.my_hand()
+//    }
+
+//    fn cards_on_table(&self) -> Option<Play> {
+//        self.game.cards_on_table()
+//    }
 
     fn valid_plays(&self) -> Vec<Play> {
         self.game.valid_plays()
     }
 
-    fn playable(&self, cards: Cards) -> Result<Play, PlayError> {
-        self.game.playable(cards)
-    }
+//    fn playable(&self, cards: Cards) -> Result<Play, PlayError> {
+//        self.game.playable(cards)
+//    }
+//
 }

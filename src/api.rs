@@ -2,38 +2,32 @@ use {
     crate::{
         game::{choose_play, Card, Cards, GameState, PlayError, Relative, Seat, Play},
         hx,
-        json_seq::JsonSeq,
     },
     async_trait::async_trait,
     axum::{
         debug_handler,
-        extract::{FromRequestParts, Query, State},
+        extract::{FromRequestParts, State},
         response::{
             sse::{self, KeepAlive, Sse},
             IntoResponse, Response,
         },
         routing::{get, post, put},
-        Form, Json, RequestPartsExt, Router, TypedHeader,
+        Form, RequestPartsExt, Router, TypedHeader,
     },
     axum_core::response::{IntoResponseParts, ResponseParts},
     axum_extra::extract::CookieJar,
-    base64::{engine::general_purpose, Engine as _},
     //	axum_server::tls_rustls::RustlsConfig,
     cookie::{Cookie, Expiration, SameSite},
     futures::future::BoxFuture,
-    headers::{authorization::Bearer, Authorization, HeaderMapExt},
     html_node::{html, text, Node},
-    http::{header::HeaderValue, request::Parts, status::StatusCode, Uri},
+    http::{request::Parts, status::StatusCode},
     rand::{seq::SliceRandom, thread_rng, Rng},
     serde::{Deserialize, Serialize},
-    serde_with::{serde_as, DisplayFromStr, DurationMilliSeconds},
+    serde_with::{serde_as, DurationMilliSeconds},
     std::{
         collections::HashMap,
         convert::Infallible,
         fmt::{self, Display},
-        future::Future,
-        mem,
-        net::{Ipv4Addr, SocketAddr},
         ops::{ControlFlow, Deref},
         str::FromStr,
         sync::Arc,
@@ -47,10 +41,6 @@ use {
         time::{interval, sleep_until, Instant, MissedTickBehavior},
     },
     tokio_stream::wrappers::UnboundedReceiverStream,
-    tower_http::{
-        services::{ServeDir, ServeFile},
-        set_header::SetResponseHeaderLayer,
-    },
     uuid::Uuid,
 };
 
@@ -671,11 +661,8 @@ type Tx = UnboundedSender<Result<sse::Event, Infallible>>;
 
 #[derive(Serialize)]
 enum Update {
-    All,
-    Welcome,
     Deal,
     Turn,
-    Host,
     Connected,
     Play,
     Win,
@@ -684,9 +671,6 @@ enum Update {
 impl Display for Update {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::All => write!(f, "all"),
-            Self::Welcome => write!(f, "welcome"),
-            Self::Host => write!(f, "host"),
             Self::Connected => write!(f, "connected"),
             Self::Deal => write!(f, "deal"),
             Self::Play => write!(f, "play"),
@@ -769,12 +753,6 @@ impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<Unauthenticated> {
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 struct HostAuthenticated {
     auth: Authenticated,
-}
-
-impl HostAuthenticated {
-    fn auth(&self) -> Authenticated {
-        self.auth
-    }
 }
 
 impl Deref for HostAuthenticated {

@@ -456,7 +456,7 @@ impl Active {
 
         self.deadline = timer.and_then(|timer| Instant::now().checked_add(timer));
 
-        let control = self.game_state.has_control();
+        let control = self.game_state.has_control(current_player);
         for other in Seat::ALL {
             let message = Message::Turn {
                 seat: current_player,

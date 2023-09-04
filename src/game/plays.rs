@@ -35,6 +35,10 @@ impl Play {
     pub fn is_pass(self) -> bool {
         matches!(self.kind, PlayKind::Pass)
     }
+
+    pub fn cards(self) -> Cards {
+        self.cards
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Hash)]

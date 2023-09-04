@@ -1,10 +1,8 @@
-@import url(card-background.css);
-
 *, *::before, *::after {
     box-sizing: inherit;
 }
 
-html, body, main {
+html, body, main, .scene {
     margin: 0;
     padding: 0;
     width: 100%;
@@ -23,14 +21,6 @@ a {
     color: oklch(53% 0.11 230);
 }
 
-#error-description {
-    display: none;
-    position: fixed;
-    left: 0;
-    top: 0;
-
-}
-
 :root {
     font-family: sans;
     box-sizing: border-box;
@@ -45,10 +35,10 @@ a {
     --rz: 0deg;
     --tx: 0px;
     --ty: 200px;
-    --tz: -1600px;
+    --tz: -2400px;
 }
 
-body {
+.scene {
     perspective: var(--perspective);
 }
 
@@ -122,7 +112,7 @@ section.right {
     transform: translateY(-800px) rotateY(90deg) translateZ(600px) rotateY(225deg) translateZ(-500px) rotateX(15deg);
 }
 
-section .cards {
+.cards {
     transform-style: preserve-3d;
     display: flex;
     flex-direction: row;
@@ -132,64 +122,42 @@ section .cards {
 .card {
     position: relative;
     display: block;
+    aspect-ratio: 209 / 303;
     width: 160px;
 }
 
-.card .card-check {
-    display: none;
-}
-
-.card .card-face {
+.card img {
     position: relative;
     padding: 0;
     margin: 0;
     border: none;
-    width: 100%;
-    height: 100%;
-    background-color: transparent;
-    background-size: contain;
-    background-repeat: no-repeat;
+/*    width: 100%;*/
+/*    height: 100%;*/
+/*    background-color: transparent;*/
+/*    background-size: contain;*/
+/*    background-repeat: no-repeat;*/
 }
 
-.my .card .card-check:checked + .card-face {
+.my .card input[type="checkbox"] {
+    display: none;
+}
+
+.my .card input[type="checkbox"]:checked + img {
     top: -160px;
     box-shadow: 30px 30px orange;
 }
 
-.my .card .card-face:hover {
+.my .card input[type="checkbox"] + img:hover {
     box-shadow: 30px 30px yellow;
 }
 
-.my .start {
+.playable-ok {
 }
 
-.my .play {
-    display: none;
-}
-
-.my .play.off-turn {
+.playable-off-turn {
     text-decoration: line-through;
 }
 
-.my .play.unplayable {
+.playable-error {
     color: red;
-}
-
-.load {
-    margin: 0;
-}
-
-.token {
-    width: 320px;
-    height: 320px;
-    overflow: hidden;
-}
-
-.token > * {
-    width: 100%;
-    height: 100%;
-}
-
-.host-config {
-    display: none;
 }

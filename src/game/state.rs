@@ -69,7 +69,7 @@ impl GameState {
             };
         }
 
-        if self.has_control() {
+        if self.has_control(self.current_player()) {
             return if play.is_pass() {
                 Err(PlayError::MustPlayOnControl)
             } else {
@@ -118,8 +118,8 @@ impl GameState {
         self.winning_player
     }
 
-    pub fn has_control(&self) -> bool {
-        self.last_player_to_not_pass == self.current_player
+    pub fn has_control(&self, seat: Seat) -> bool {
+        self.current_player == seat && self.last_player_to_not_pass == seat
     }
 
     pub fn cards_on_table(&self) -> Option<Play> {
@@ -194,6 +194,17 @@ impl Seat {
 
     pub fn relative(self, relative: Relative) -> Self {
         Self::from_i8(relative as i8 + self as i8)
+    }
+}
+
+impl Display for Seat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::North => write!(f, "north"),
+            Self::East => write!(f, "east"),
+            Self::South => write!(f, "south"),
+            Self::West => write!(f, "west"),
+        }
     }
 }
 

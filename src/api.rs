@@ -97,13 +97,13 @@ async fn index() -> Result<impl IntoResponse> {
                 <title>Pusoy</title>
                 <meta charset="utf-8">
                 <base href=".">
-                <link rel="stylesheet" href="/index.css">
+                <link rel="stylesheet" href="./index.css">
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <script src="/assets/htmx-1.9.5.min.js"></script>
-                <script src="/assets/htmx-sse-1.9.5.js"></script>
+                <script src="./htmx-1.9.5.min.js"></script>
+                <script src="./htmx-sse-1.9.5.js"></script>
             </head>
             <body>
-                <div hx-post="/api/join" hx-trigger="load" hx-swap="outerHTML"></div>
+                <div hx-trigger="load" hx-post="./api/join" hx-swap="outerHTML"></div>
             </body>
         </html>
     })
@@ -139,9 +139,9 @@ async fn join(
 
     let reconnected = if let Some(reconnected) = reconnected { text!("{}", reconnected) } else { text!("") };
     let html = html! {
-        <div hx-trigger="every 30s" hx-post="/api/keep-alive" hx-swap="none"></div>
-        <div class="scene" hx-ext="sse" sse-connect="/api/subscribe">
-            <main hx-trigger="load, sse:update" hx-get="/api/state" hx-swap="innerHTML"></main>
+        <div hx-trigger="every 30s" hx-post="./api/keep-alive" hx-swap="none"></div>
+        <div class="scene" hx-ext="sse" sse-connect="./api/subscribe">
+            <main hx-trigger="load, sse:update" hx-get="./api/state" hx-swap="innerHTML"></main>
             <div>{reconnected}</div>
         </div>
     };
@@ -210,13 +210,13 @@ async fn playable(
 
     Ok(match playable {
         Ok(play) if play.is_pass() => 
-            html! { <button class="playable-ok" type="submit" hx-post="/api/play" title="pass">"pass"</button> },
+            html! { <button class="playable-ok" type="submit" hx-post="./api/play" title="pass">"pass"</button> },
         Ok(_play) => 
-            html! { <button class="playable-ok" type="submit" hx-post="/api/play" title="play">"play"</button> },
+            html! { <button class="playable-ok" type="submit" hx-post="./api/play" title="play">"play"</button> },
         Err(Error::NotCurrent) => 
-            html! { <button class="playable-off-turn" type="submit" hx-post="/api/play" title="play" disabled>"play"</button> },
+            html! { <button class="playable-off-turn" type="submit" hx-post="./api/play" title="play" disabled>"play"</button> },
         Err(Error::PlayError(e)) => 
-            html! { <button class="playable-error" type="submit" hx-post="/api/play" title={e.to_string()} disabled>"play"</button> },
+            html! { <button class="playable-error" type="submit" hx-post="./api/play" title={e.to_string()} disabled>"play"</button> },
         Err(e) => return Err(e),
     })
 }
@@ -433,7 +433,7 @@ impl Session {
                     .into_iter()
                     .map(|card| html! {
                         <div class="card" id={&self.card_id_cypher[&card]}>
-                            <img src={format!("/assets/cards/{card}.svg")} alt={&card}>
+                            <img src={format!("./cards/{card}.svg")} alt={&card}>
                         </div>
                     })
                 }
@@ -452,11 +452,11 @@ impl Session {
                             <form id="timer-controls">
                                 <label>
                                     "enable action timer"
-                                    <input type="checkbox" name="enable-timer" hx-trigger="load, change" hx-include="#timer-controls" hx-put="/api/timer" />
+                                    <input type="checkbox" name="enable-timer" hx-trigger="load, change" hx-include="#timer-controls" hx-put="./api/timer" />
                                 </label>
-                                <input type="range" min="1" max="120000" value="30000" name="timer-value" hx-trigger="load, change" hx-include="#timer-controls" hx-put="/api/timer" />
+                                <input type="range" min="1" max="120000" value="30000" name="timer-value" hx-trigger="load, change" hx-include="#timer-controls" hx-put="./api/timer" />
                             </form>
-                            <button hx-post="/api/start">"start the game"</button>
+                            <button hx-post="./api/start">"start the game"</button>
                         }
                     } else {
                         html! {}
@@ -472,14 +472,14 @@ impl Session {
                                     .map(|card| {
                                         html! {
                                             <label class="card" id={&self.card_id_cypher[&card]}>
-                                                <input type="checkbox" name={&card} value={&card} hx-trigger="change" hx-post="/api/playable" hx-target="next button" hx-swap="outerHTML">
-                                                <img src={format!("/assets/cards/{card}.svg")} alt={&card}>
+                                                <input type="checkbox" name={&card} value={&card} hx-trigger="change" hx-post="./api/playable" hx-target="next button" hx-swap="outerHTML">
+                                                <img src={format!("./cards/{card}.svg")} alt={&card}>
                                             </label>
                                         }
                                     })
                                 }
                                 </div>
-                                <button hx-trigger="load" hx-post="/api/playable" hx-swap="outerHTML"></button>
+                                <button hx-trigger="load" hx-post="./api/playable" hx-swap="outerHTML"></button>
                             </form>
                         },
                         (Phase::Active | Phase::Post, false) => html! {
@@ -488,7 +488,7 @@ impl Session {
                                 .map(|card| {
                                     html! {
                                         <label class="card" id={&self.card_id_cypher[&card]}>
-                                            <img src={format!("/assets/cards/back.svg")} alt="hidden card">
+                                            <img src={format!("./cards/back.svg")} alt="hidden card">
                                         </label>
                                     }
                                 })

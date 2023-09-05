@@ -1,46 +1,26 @@
 use {
     async_trait::async_trait,
     axum::{
-        debug_handler,
-        extract::{FromRequestParts, State, Path},
+        extract::{FromRequestParts, Path},
         response::{
             sse::{self, KeepAlive, Sse},
             IntoResponse, Response,
         },
-        routing::{get, post, put, delete, patch},
-        Form, RequestPartsExt, Router, TypedHeader, Json, 
+        routing::{delete, get, patch, post},
+        Json, RequestPartsExt, Router,
     },
-    axum_core::response::{IntoResponseParts, ResponseParts},
-    axum_extra::extract::CookieJar,
-    cookie::{Cookie, Expiration, SameSite},
-    futures::future::BoxFuture,
-    html_node::{html, text, Node},
     http::{request::Parts, status::StatusCode},
-    rand::{seq::SliceRandom, thread_rng, Rng},
     serde::{Deserialize, Serialize},
-    serde_json::{json},
-    serde_with::{serde_as, DurationMilliSeconds},
-    std::{
-        collections::HashMap,
-        convert::Infallible,
-        fmt::{self, Display},
-        ops::{ControlFlow, Deref},
-        str::FromStr,
-        sync::Arc,
-        sync::Weak,
-        time::Duration,
-    },
+    serde_json::json,
+    std::{collections::HashMap, convert::Infallible, sync::Arc},
     tokio::{
-        sync::mpsc::{self, UnboundedSender, unbounded_channel},
+        sync::mpsc::{unbounded_channel, UnboundedSender},
         sync::{Mutex, OwnedMutexGuard},
-        task,
-        time::{interval, sleep_until, Instant, MissedTickBehavior},
     },
-    tokio_stream::{Stream, StreamExt, wrappers::UnboundedReceiverStream},
-    uuid::Uuid,
+    tokio_stream::{wrappers::UnboundedReceiverStream, Stream, StreamExt},
 };
 
-//#[tokio::main] 
+//#[tokio::main]
 //async fn main() {
 //    let _ = warp::fs::dir("www")
 //        .or(record_store())
@@ -69,7 +49,7 @@ use {
 //    tokio::join!(regular, redirect_to_tls);
 //}
 
-pub fn api<S, I: IntoIterator<Item=String>>(tables: I) -> Router<S> {
+pub fn api<S, I: IntoIterator<Item = String>>(tables: I) -> Router<S> {
     let tables = tables.into_iter().map(TableName);
 
     Router::new()
@@ -82,7 +62,10 @@ pub fn api<S, I: IntoIterator<Item=String>>(tables: I) -> Router<S> {
         .with_state(Tables::new(tables))
 }
 
-async fn record_create(TableExtract { mut table }: TableExtract, Json(record): Json<Record>) -> impl IntoResponse {
+async fn record_create(
+    TableExtract { mut table }: TableExtract,
+    Json(record): Json<Record>,
+) -> impl IntoResponse {
     table.next_record_id.0 += 1;
     let id = RecordId(table.next_record_id.0);
     let json = json!({ "id": id, "record": record });
@@ -91,29 +74,58 @@ async fn record_create(TableExtract { mut table }: TableExtract, Json(record): J
     Json(json)
 }
 
-async fn record_update(TableIdExtract { mut table, record_id }: TableIdExtract, Json(record): Json<Record>) -> Result<impl IntoResponse> {
-    let existing = table.records.get_mut(&record_id).ok_or(Error::RecordNotFound)?;
+async fn record_update(
+    TableIdExtract {
+        mut table,
+        record_id,
+    }: TableIdExtract,
+    Json(record): Json<Record>,
+) -> Result<impl IntoResponse> {
+    let existing = table
+        .records
+        .get_mut(&record_id)
+        .ok_or(Error::RecordNotFound)?;
     existing.fields.extend(record.fields);
     let json = json!({ "id": record_id, "record": existing });
     table.notify(RecordEventKind::Update, &json).await;
     Ok(Json(json))
 }
 
-async fn record_delete(TableIdExtract { mut table, record_id }: TableIdExtract) -> Result<impl IntoResponse> {
-    let existing = table.records.remove(&record_id).ok_or(Error::RecordNotFound)?;
+async fn record_delete(
+    TableIdExtract {
+        mut table,
+        record_id,
+    }: TableIdExtract,
+) -> Result<impl IntoResponse> {
+    let existing = table
+        .records
+        .remove(&record_id)
+        .ok_or(Error::RecordNotFound)?;
     let json = json!({ "id": record_id, "record": existing });
     table.notify(RecordEventKind::Delete, &json).await;
     Ok(Json(json))
 }
 
-async fn record_read_id(TableIdExtract { table, record_id }: TableIdExtract) -> Result<impl IntoResponse> {
+async fn record_read_id(
+    TableIdExtract { table, record_id }: TableIdExtract,
+) -> Result<impl IntoResponse> {
     let existing = table.records.get(&record_id).ok_or(Error::RecordNotFound)?;
     Ok(Json(json!({ "id": record_id, "record": existing })))
 }
 
-async fn record_read_query(TableExtract { table }: TableExtract, Json(record): Json<Record>) -> Result<impl IntoResponse> {
-    let existing: serde_json::Value = table.records.iter() 
-        .filter(|(_, r)| record.fields.iter().all(|(key, value)| r.fields.get(key) == Some(value)))
+async fn record_read_query(
+    TableExtract { table }: TableExtract,
+    Json(record): Json<Record>,
+) -> Result<impl IntoResponse> {
+    let existing: serde_json::Value = table
+        .records
+        .iter()
+        .filter(|(_, r)| {
+            record
+                .fields
+                .iter()
+                .all(|(key, value)| r.fields.get(key) == Some(value))
+        })
         .map(|(id, r)| json!({ "id": id, "record": r }))
         .collect();
     Ok(Json(existing))
@@ -130,9 +142,12 @@ struct Tables {
 }
 
 impl Tables {
-    fn new<I: IntoIterator<Item=TableName>>(tables: I) -> Arc<Mutex<Tables>> {
+    fn new<I: IntoIterator<Item = TableName>>(tables: I) -> Arc<Mutex<Tables>> {
         Arc::new_cyclic(move |_this| {
-            let tables = tables.into_iter().map(|table| (table, Default::default())).collect();
+            let tables = tables
+                .into_iter()
+                .map(|table| (table, Default::default()))
+                .collect();
             Mutex::new(Tables { tables })
         })
     }
@@ -150,13 +165,13 @@ impl Table {
         let message = json!({
             "kind": kind,
             "update": update,
-        }).to_string();
-        self.subscribers.retain(|stream| {
-            stream.send(message.clone()).is_ok()
-        });
+        })
+        .to_string();
+        self.subscribers
+            .retain(|stream| stream.send(message.clone()).is_ok());
     }
 
-    fn new_subscriber(&mut self) -> impl Stream<Item=String> {
+    fn new_subscriber(&mut self) -> impl Stream<Item = String> {
         let (tx, rx) = unbounded_channel();
         let rx = UnboundedReceiverStream::new(rx);
         self.subscribers.push(tx);
@@ -210,7 +225,10 @@ impl FromRequestParts<Arc<Mutex<Tables>>> for TableExtract {
             .await
             .map_err(|err| err.into_response())?;
         let tables = state.lock().await;
-        let table = tables.tables.get(&table).ok_or_else(|| Error::TableNotFound.into_response())?;
+        let table = tables
+            .tables
+            .get(&table)
+            .ok_or_else(|| Error::TableNotFound.into_response())?;
         let table = Arc::clone(table).lock_owned().await;
         Ok(TableExtract { table })
     }
@@ -233,7 +251,10 @@ impl FromRequestParts<Arc<Mutex<Tables>>> for TableIdExtract {
             .await
             .map_err(|err| err.into_response())?;
         let tables = state.lock().await;
-        let table = tables.tables.get(&table).ok_or_else(|| Error::TableNotFound.into_response())?;
+        let table = tables
+            .tables
+            .get(&table)
+            .ok_or_else(|| Error::TableNotFound.into_response())?;
         let table = Arc::clone(table).lock_owned().await;
         Ok(TableIdExtract { table, record_id })
     }
@@ -249,9 +270,15 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
-            Self::RecordNotFound => (StatusCode::NOT_FOUND, Json(json!({ "reason": "table not found" }))),
-            Self::TableNotFound => (StatusCode::NOT_FOUND, Json(json!({ "reason": "record not found" }))),
-        }.into_response()
+            Self::RecordNotFound => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "reason": "table not found" })),
+            ),
+            Self::TableNotFound => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "reason": "record not found" })),
+            ),
+        }
+        .into_response()
     }
 }
-

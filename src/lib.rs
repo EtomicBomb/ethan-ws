@@ -20,45 +20,16 @@ use {
     tokio_stream::{wrappers::UnboundedReceiverStream, Stream, StreamExt},
 };
 
-//#[tokio::main]
-//async fn main() {
-//    let _ = warp::fs::dir("www")
-//        .or(record_store())
-//        .recover(handle_rejection);
-//
-//    let regular = warp::serve(all)
-//        .tls()
-//        .cert_path("secret/cert.pem")
-//        .key_path("secret/key.rsa")
-//        .run(([0, 0, 0, 0], 443));
-//
-//    let redirect_to_tls = warp::path::full()
-//        .map(|path: warp::path::FullPath| {
-//            let destination = warp::http::Uri::builder()
-//                .scheme(warp::http::uri::Scheme::HTTPS)
-//                .authority("ethan.ws")
-//                .path_and_query(path.as_str())
-//                .build()
-//                .unwrap();
-//            warp::redirect(destination)
-//        });
-//
-//    let redirect_to_tls = warp::serve(redirect_to_tls)
-//        .run(([0, 0, 0, 0], 80));
-//
-//    tokio::join!(regular, redirect_to_tls);
-//}
-
-pub fn api<S, I: IntoIterator<Item = String>>(tables: I) -> Router<S> {
-    let tables = tables.into_iter().map(TableName);
+pub fn api<S, I: IntoIterator<Item = T>, T: Into<String>>(tables: I) -> Router<S> {
+    let tables = tables.into_iter().map(|s| s.into()).map(TableName);
 
     Router::new()
         .route("/create/:table", post(record_create))
         .route("/update/:table/:record_id", patch(record_update))
         .route("/delete/:table/:record_id", delete(record_delete))
-        .route("/read_id/:table/:record_id", get(record_read_id))
-        .route("/read_query/:table", get(record_read_query))
-        .route("/subscribe/:table/:record_id", get(record_subscribe))
+        .route("/read-id/:table/:record_id", get(record_read_id))
+        .route("/read-query/:table", post(record_read_query))
+        .route("/subscribe/:table", get(record_subscribe))
         .with_state(Tables::new(tables))
 }
 

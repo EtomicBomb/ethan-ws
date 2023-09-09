@@ -3,6 +3,7 @@ use serde::ser::{Serialize, SerializeSeq, Serializer};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use std::fmt;
 use std::iter::FromIterator;
+use std::num::NonZeroU64;
 use std::str::FromStr;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Default)]
@@ -56,23 +57,23 @@ impl Cards {
     }
 
     #[must_use]
-    pub fn insert(self, card: Card) -> Self {
-        self.insert_all(Self::single(card))
+    pub fn with(self, card: Card) -> Self {
+        self.with_all(Self::single(card))
     }
 
     #[must_use]
-    pub fn insert_all(self, other: Self) -> Self {
+    pub fn with_all(self, other: Self) -> Self {
         let bits = self.bits | other.bits;
         Self { bits }
     }
 
     #[must_use]
-    pub fn remove(self, card: Card) -> Self {
-        self.remove_all(Self::single(card))
+    pub fn without(self, card: Card) -> Self {
+        self.without_all(Self::single(card))
     }
 
     #[must_use]
-    pub fn remove_all(self, other: Self) -> Self {
+    pub fn without_all(self, other: Self) -> Self {
         let bits = self.bits & !other.bits;
         Self { bits }
     }
@@ -113,21 +114,16 @@ impl Cards {
     }
 
     pub fn min(self) -> Option<Card> {
-        if self.is_empty() {
-            return None;
-        }
-        let n = self.bits.trailing_zeros();
-        Some(Card { index: n as u8 })
+        let index = NonZeroU64::new(self.bits)?;
+        let index = index.trailing_zeros() as u8;
+        Some(Card { index })
     }
 
     pub fn max(self) -> Option<Card> {
-        if self.is_empty() {
-            return None;
-        }
-        let n = self.bits.leading_zeros();
-        Some(Card {
-            index: 63 - n as u8,
-        })
+        let index = NonZeroU64::new(self.bits)?;
+        let index = index.leading_zeros() as u8;
+        let index = 63 - index;
+        Some(Card { index })
     }
 }
 
@@ -140,7 +136,7 @@ impl fmt::Debug for Cards {
 impl Extend<Card> for Cards {
     fn extend<I: IntoIterator<Item = Card>>(&mut self, iter: I) {
         for card in iter.into_iter() {
-            *self = self.insert(card);
+            *self = self.with(card);
         }
     }
 }
@@ -181,7 +177,7 @@ impl<'de> Deserialize<'de> for Cards {
             {
                 let mut cards = Cards::default();
                 while let Some(card) = seq.next_element()? {
-                    cards = cards.insert(card);
+                    cards = cards.with(card);
                 }
                 Ok(cards)
             }
@@ -212,7 +208,7 @@ impl Iterator for CardsIter {
     type Item = Card;
     fn next(&mut self) -> Option<Self::Item> {
         let card = self.cards.min()?;
-        self.cards = self.cards.remove(card);
+        self.cards = self.cards.without(card);
         Some(card)
     }
 }
@@ -282,9 +278,8 @@ impl FromStr for Card {
         if elements.next().is_some() {
             return Err(ToCardError);
         }
-        Ok(Card {
-            index: rank * 4 + suit,
-        })
+        let index = rank * 4 + suit;
+        Ok(Card { index })
     }
 }
 

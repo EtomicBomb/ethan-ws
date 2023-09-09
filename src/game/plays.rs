@@ -165,7 +165,7 @@ impl RankBlocks {
                 let kind = PlayKind::Poker(Poker::FullHouse(ranking_card));
 
                 for &pair in block1.pairs.iter() {
-                    let cards = pair.insert_all(triple);
+                    let cards = pair.with_all(triple);
                     ret.push(Play { cards, kind });
                 }
             }
@@ -190,7 +190,7 @@ impl RankBlocks {
             let kind = PlayKind::Poker(Poker::Quadruple(ranking_card));
 
             for &single in block2.singles.iter() {
-                let cards = quadruple.insert(single);
+                let cards = quadruple.with(single);
                 ret.push(Play { cards, kind });
             }
         }
@@ -217,15 +217,15 @@ struct Block {
 impl Block {
     fn insert(&mut self, card: Card) {
         if let Some(&triple) = self.triples.first() {
-            self.quadruples = Some(triple.insert(card));
+            self.quadruples = Some(triple.with(card));
         }
 
         for &pair in self.pairs.iter() {
-            self.triples.push(pair.insert(card));
+            self.triples.push(pair.with(card));
         }
 
         for &old in self.singles.iter() {
-            let pair = Cards::single(old).insert(card);
+            let pair = Cards::single(old).with(card);
             self.pairs.push(pair);
         }
 
@@ -241,7 +241,7 @@ fn flushes(cards: Cards) -> Vec<Play> {
         let mut add_to_currents = Vec::new();
         for card in suit {
             for current in currents.iter().cloned() {
-                let current = current.insert(card);
+                let current = current.with(card);
 
                 if current.len() == 5 {
                     visit(current);
@@ -312,5 +312,213 @@ fn counter<F: FnMut(&'_ [usize])>(base: &[usize], mut visit: F) {
         }
         let Some(x) = xs.get_mut(i) else { break };
         *x += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        super::{Card, Cards},
+        PlayKind, Poker,
+    };
+    use std::str::FromStr;
+
+    #[test]
+    fn flush() {
+        let cards = ["3C", "5C", "6C", "7C", "8C"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::Flush(Card::from_str("8C").unwrap())))
+        );
+    }
+
+    #[test]
+    fn not_flush() {
+        let cards = ["3C", "5C", "6C", "7C", "8H"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(PlayKind::infer(cards), None);
+    }
+
+    #[test]
+    fn straight_flush() {
+        let cards = ["4C", "5C", "6C", "7C", "8C"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::StraightFlush(
+                Card::from_str("8C").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn straight_low() {
+        let cards = ["AC", "2C", "3H", "4C", "5S"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::Straight(
+                Card::from_str("2C").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn straight_med() {
+        let cards = ["4H", "5C", "6C", "7S", "8C"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::Straight(
+                Card::from_str("8C").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn straight_high() {
+        let cards = ["TC", "JC", "QH", "KC", "AS"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::Straight(
+                Card::from_str("AS").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn straight_bad() {
+        let cards = ["JC", "QH", "KC", "AS", "2H"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(PlayKind::infer(cards), None);
+    }
+
+    #[test]
+    fn straight_bad2() {
+        let cards = ["KS", "AC", "2C", "3H", "4C"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(PlayKind::infer(cards), None);
+    }
+
+    #[test]
+    fn full_house() {
+        let cards = ["AC", "AS", "AH", "JC", "JS"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::FullHouse(
+                Card::from_str("AH").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn full_house_high() {
+        let cards = ["AC", "AS", "AH", "2C", "2S"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::FullHouse(
+                Card::from_str("AH").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn quadruple_high() {
+        let cards = ["AC", "AS", "AH", "AD", "2S"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::Quadruple(
+                Card::from_str("AD").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn quadruple() {
+        let cards = ["AC", "AS", "AH", "AD", "JS"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Poker(Poker::Quadruple(
+                Card::from_str("AD").unwrap()
+            )))
+        );
+    }
+
+    #[test]
+    fn pass() {
+        let cards = []
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(PlayKind::infer(cards), Some(PlayKind::Pass));
+    }
+
+    #[test]
+    fn single() {
+        let cards = ["AC"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Single(Card::from_str("AC").unwrap()))
+        );
+    }
+
+    #[test]
+    fn pair() {
+        let cards = ["AC", "AS"]
+            .into_iter()
+            .map(Card::from_str)
+            .collect::<Result<Cards, _>>()
+            .unwrap();
+        assert_eq!(
+            PlayKind::infer(cards),
+            Some(PlayKind::Pair(Card::from_str("AS").unwrap()))
+        );
     }
 }

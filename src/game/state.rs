@@ -4,15 +4,15 @@ use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use serde_with::SerializeDisplay;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt::{self, Display};
 
 #[derive(Debug)]
 pub struct GameState {
-    hands: HashMap<Seat, Cards>,
+    hands: SeatMap<Cards>,
     current_player: Seat,
     cards_on_table: Option<Play>,
     last_player_to_not_pass: Seat,
+    passed: SeatMap<bool>,
     winning_player: Option<Seat>,
 }
 
@@ -27,13 +27,12 @@ impl GameState {
         let mut deck = Vec::from_iter(Cards::ENTIRE_DECK);
         deck.shuffle(&mut thread_rng());
 
-        let hands: HashMap<_, _> = Seat::ALL
-            .into_iter()
-            .zip(deck.chunks(13))
-            .map(|(seat, hand)| (seat, Cards::from_iter(hand.iter().cloned())))
-            .collect();
+        let mut hands = SeatMap::default();
+        for ((_seat, hand), cards) in hands.iter_mut().zip(deck.chunks(13)) {
+            *hand = cards.iter().cloned().collect::<Cards>();
+        }
 
-        let (&current_player, _) = hands
+        let (current_player, _) = hands
             .iter()
             .find(|(_, hand)| hand.contains(Card::THREE_OF_CLUBS))
             .unwrap();
@@ -43,12 +42,13 @@ impl GameState {
             current_player,
             cards_on_table: None,
             last_player_to_not_pass: current_player,
+            passed: SeatMap::default(),
             winning_player: None,
         }
     }
 
     pub fn valid_plays(&self) -> Vec<Play> {
-        Play::all(self.my_hand())
+        Play::all(self.hands[self.current_player])
             .into_iter()
             .filter(|p| self.playable(p.cards).is_ok())
             .collect()
@@ -57,7 +57,7 @@ impl GameState {
     pub fn playable(&self, cards: Cards) -> Result<Play, PlayError> {
         let play = Play::infer(cards).ok_or(PlayError::NonsenseCards)?;
 
-        if !cards.is_subset(self.my_hand()) {
+        if !cards.is_subset(self.hands[self.current_player]) {
             return Err(PlayError::DontHaveCard);
         }
 
@@ -97,25 +97,32 @@ impl GameState {
     pub fn play(&mut self, cards: Cards) -> Result<Play, PlayError> {
         let play = self.playable(cards)?;
 
-        let current_hand = self.hands.get_mut(&self.current_player).unwrap();
-        *current_hand = current_hand.remove_all(cards);
+        let hand = &mut self.hands[self.current_player];
+        *hand = hand.without_all(cards);
 
-        if self.hands[&self.current_player].is_empty() {
+        if self.hands[self.current_player].is_empty() {
             self.winning_player = Some(self.current_player);
         }
 
-        if !play.is_pass() {
+        if play.is_pass() {
+            self.passed[self.current_player] = true;
+        } else {
             self.last_player_to_not_pass = self.current_player;
             self.cards_on_table = Some(play);
         }
 
         self.current_player = self.current_player.next();
+        self.passed[self.current_player] = false;
 
         Ok(play)
     }
 
     pub fn winning_player(&self) -> Option<Seat> {
         self.winning_player
+    }
+
+    pub fn passed(&self, seat: Seat) -> bool {
+        self.passed[seat]
     }
 
     pub fn has_control(&self, seat: Seat) -> bool {
@@ -127,12 +134,12 @@ impl GameState {
     }
 
     pub fn hand(&self, seat: Seat) -> Cards {
-        self.hands[&seat]
+        self.hands[seat]
     }
 
-    pub fn my_hand(&self) -> Cards {
-        self.hand(self.current_player)
-    }
+    //    pub fn my_hand(&self) -> Cards {
+    //        self.hand(self.current_player)
+    //    }
 
     pub fn current_player(&self) -> Seat {
         self.current_player
@@ -205,6 +212,41 @@ impl Display for Seat {
             Self::South => write!(f, "south"),
             Self::West => write!(f, "west"),
         }
+    }
+}
+
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Default, Serialize, Deserialize)]
+pub struct SeatMap<T> {
+    inner: [T; 4],
+}
+
+impl<T> SeatMap<T> {
+    pub fn iter(&self) -> impl Iterator<Item = (Seat, &'_ T)> {
+        self.inner
+            .iter()
+            .zip(0..)
+            .map(|(item, i)| (Seat::from_i8(i), item))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (Seat, &'_ mut T)> {
+        self.inner
+            .iter_mut()
+            .zip(0..)
+            .map(|(item, i)| (Seat::from_i8(i), item))
+    }
+}
+
+impl<T> ops::Index<Seat> for SeatMap<T> {
+    type Output = T;
+    fn index(&self, seat: Seat) -> &Self::Output {
+        &self.inner[seat as usize]
+    }
+}
+
+use std::ops;
+impl<T> ops::IndexMut<Seat> for SeatMap<T> {
+    fn index_mut(&mut self, seat: Seat) -> &mut Self::Output {
+        &mut self.inner[seat as usize]
     }
 }
 

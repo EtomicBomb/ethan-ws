@@ -11,7 +11,6 @@ use {
     },
     http::{request::Parts, status::StatusCode},
     serde::{Deserialize, Serialize},
-    serde_json::json,
     std::{collections::HashMap, convert::Infallible, sync::Arc},
     tokio::{
         sync::mpsc::{unbounded_channel, UnboundedSender},
@@ -39,10 +38,10 @@ async fn record_create(
 ) -> impl IntoResponse {
     table.next_record_id.0 += 1;
     let id = RecordId(table.next_record_id.0);
-    let json = json!({ "id": id, "record": record });
-    table.notify(RecordEventKind::Create, &json).await;
+    let update = Update { id, record: record.clone() };
+    table.notify(Notification::Create(&update)).await;
     table.records.insert(id, record);
-    Json(json)
+    Json(update)
 }
 
 async fn record_update(
@@ -57,9 +56,9 @@ async fn record_update(
         .get_mut(&record_id)
         .ok_or(Error::RecordNotFound)?;
     existing.fields.extend(record.fields);
-    let json = json!({ "id": record_id, "record": existing });
-    table.notify(RecordEventKind::Update, &json).await;
-    Ok(Json(json))
+    let update = Update { id: record_id, record: existing.clone() };
+    table.notify(Notification::Update(&update)).await;
+    Ok(Json(update))
 }
 
 async fn record_delete(
@@ -72,23 +71,24 @@ async fn record_delete(
         .records
         .remove(&record_id)
         .ok_or(Error::RecordNotFound)?;
-    let json = json!({ "id": record_id, "record": existing });
-    table.notify(RecordEventKind::Delete, &json).await;
-    Ok(Json(json))
+    let update = Update { id: record_id, record: existing };
+    table.notify(Notification::Delete(&update)).await;
+    Ok(Json(update))
 }
 
 async fn record_read_id(
     TableIdExtract { table, record_id }: TableIdExtract,
 ) -> Result<impl IntoResponse> {
     let existing = table.records.get(&record_id).ok_or(Error::RecordNotFound)?;
-    Ok(Json(json!({ "id": record_id, "record": existing })))
+    let update = Update { id: record_id, record: existing.clone() };
+    Ok(Json(update))
 }
 
 async fn record_read_query(
     TableExtract { table }: TableExtract,
     Json(record): Json<Record>,
 ) -> Result<impl IntoResponse> {
-    let existing: serde_json::Value = table
+    let existing: Vec<_> = table
         .records
         .iter()
         .filter(|(_, r)| {
@@ -97,7 +97,7 @@ async fn record_read_query(
                 .iter()
                 .all(|(key, value)| r.fields.get(key) == Some(value))
         })
-        .map(|(id, r)| json!({ "id": id, "record": r }))
+        .map(|(&id, r)| Update { id, record: r.clone() })
         .collect();
     Ok(Json(existing))
 }
@@ -126,20 +126,15 @@ impl Tables {
 
 #[derive(Default)]
 struct Table {
-    subscribers: Vec<UnboundedSender<String>>,
     records: HashMap<RecordId, Record>,
     next_record_id: RecordId,
+    subscribers: Vec<UnboundedSender<String>>,
 }
 
 impl Table {
-    async fn notify<'a>(&mut self, kind: RecordEventKind, update: &serde_json::Value) {
-        let message = json!({
-            "kind": kind,
-            "update": update,
-        })
-        .to_string();
-        self.subscribers
-            .retain(|stream| stream.send(message.clone()).is_ok());
+    async fn notify<'a>(&mut self, notification: Notification<'_>) {
+        let notification = serde_json::to_string(&notification).unwrap();
+        self.subscribers.retain(|stream| stream.send(notification.clone()).is_ok());
     }
 
     fn new_subscriber(&mut self) -> impl Stream<Item = String> {
@@ -150,21 +145,13 @@ impl Table {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "lowercase")]
-enum RecordEventKind {
-    Create,
-    Update,
-    Delete,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(transparent)]
 struct Record {
     fields: HashMap<String, Field>,
 }
 
-#[derive(PartialEq, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 enum Field {
     Null,
@@ -179,6 +166,21 @@ struct TableName(String);
 #[derive(Serialize, Default, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 struct RecordId(u64);
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "lowercase")]
+#[serde(tag = "kind", content = "update")]
+enum Notification<'a> {
+    Create(&'a Update),
+    Update(&'a Update),
+    Delete(&'a Update),
+}
+
+#[derive(Serialize, Debug)]
+struct Update {
+    id: RecordId,
+    record: Record,
+}
 
 struct TableExtract {
     table: OwnedMutexGuard<Table>,
@@ -243,11 +245,11 @@ impl IntoResponse for Error {
         match self {
             Self::RecordNotFound => (
                 StatusCode::NOT_FOUND,
-                Json(json!({ "reason": "table not found" })),
+                Json(HashMap::from([("reason", "record not found")])),
             ),
             Self::TableNotFound => (
                 StatusCode::NOT_FOUND,
-                Json(json!({ "reason": "record not found" })),
+                Json(HashMap::from([("reason", "table not found")])),
             ),
         }
         .into_response()

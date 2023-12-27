@@ -136,7 +136,9 @@ impl RankBlocks {
     fn straights(&self) -> Vec<Play> {
         let mut ret = Vec::new();
 
-        for i in 0..13 {
+        let straights_start = 11; // the contiguous block of valid straights starts at aces
+        let num_straights = 10; // there are 10 kinds of straights (starting or ending at ace)
+        for i in straights_start..straights_start + num_straights {
             let blocks = Vec::from_iter((i..i + 5).map(|i| &self.blocks[i % 13].singles));
 
             let base = Vec::from_iter(blocks.iter().map(|b| b.len()));

@@ -1,6 +1,7 @@
 use {
     crate::{
         game::{choose_play, Card, Cards, GameState, Play, PlayError, Relative, Seat, SeatMap},
+        html::{HtmlBuf},
         hx,
     },
     async_trait::async_trait,
@@ -9,16 +10,18 @@ use {
         extract::{FromRequestParts, State},
         response::{
             sse::{self, KeepAlive, Sse},
-            IntoResponse, Response,
+            IntoResponse, Response, 
         },
         routing::{get, post, put},
-        Form, RequestPartsExt, Router, TypedHeader,
+        Form, RequestPartsExt, Router, 
     },
     axum_core::response::{IntoResponseParts, ResponseParts},
-    axum_extra::extract::CookieJar,
+    axum_extra::{
+        TypedHeader,
+        extract::CookieJar,
+    },
     cookie::{Cookie, Expiration, SameSite},
     futures::future::BoxFuture,
-    html_node::{html, text, Node},
     http::{request::Parts, status::StatusCode},
     rand::{seq::SliceRandom, thread_rng, Rng},
     serde::{Deserialize, Serialize},
@@ -33,11 +36,12 @@ use {
         sync::Weak,
         time::Duration,
     },
+    tinytemplate::{TinyTemplate},
     tokio::{
         sync::mpsc::{self, UnboundedSender},
         sync::{Mutex, OwnedMutexGuard},
         task,
-        time::{interval, sleep_until, Instant, MissedTickBehavior},
+        time::{sleep_until, Instant},
     },
     tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt},
     uuid::Uuid,
@@ -63,7 +67,7 @@ pub fn api<S>() -> Router<S> {
 async fn connect(
     State(state): State<Arc<Mutex<ApiState>>>,
     user_session: Option<UserSession<Authenticated>>,
-    TypedHeader(hx::CurrentUrl(mut url)): TypedHeader<hx::CurrentUrl>,
+    TypedHeader(hx::CurrentUrl(mut url)): TypedHeader<hx::CurrentUrl>, // XXX should be referer?
 ) -> Result<impl IntoResponse> {
     let url_session_id = url
         .query_pairs()
@@ -97,19 +101,25 @@ async fn connect(
         .clear()
         .append_pair("session_id", &format!("{}", auth.session_id));
 
-    let reconnect_reason = if let Some(reconnect_reason) = reconnect_reason {
-        text!("{}", reconnect_reason)
-    } else {
-        text!("")
-    };
-    let html = html! {
-        <div hx-trigger="every 30s" hx-post="./api/keep-alive" hx-swap="none"></div>
-        <div class="scene" hx-ext="sse" sse-connect="./api/subscribe">
-            <main hx-trigger="load, sse:update" hx-get="./api/state" hx-swap="innerHTML"></main>
-            <div>{ reconnect_reason }</div>
-        </div>
-    };
-
+    let html = HtmlBuf::default()
+        .node("div", |h| h
+            .a("hx-trigger", "every 30s")
+            .a("hx-post", "api/keep-alive")
+        )
+        .node("div", |h| h
+            .a("hx-ext", "sse")
+            .a("sse-connect", "api/subscribe")
+            .node("main", |h| h
+                .a("hx-trigger", "load, sse:message")
+                .a("hx-get", "api/state")
+                .a("hx-swap", "innerHTML")
+            )
+            .node("div", |h| h
+                .map_some(reconnect_reason, |h, reconnect_reason| h
+                    .text(format!("{}", reconnect_reason))
+                )
+            )
+        );
     Ok((*auth, TypedHeader(hx::ReplaceUrl(url)), html))
 }
 
@@ -126,15 +136,20 @@ async fn subscribe(mut user_session: UserSession<Authenticated>) -> Result<impl 
         .subscribe(user_session.auth, tx)
         .await?;
     let rx = UnboundedReceiverStream::new(rx)
-        .map(|data| html! { <div>{text!("{}", data)}</div> })
-        .map(|data| sse::Event::default().data(data.to_string()).event("update"))
+        .map(|data| format!("{}", data))
+        .map(|data| sse::Event::default().data(data).event("message"))
         .map(Ok::<_, Infallible>);
     Ok(Sse::new(rx).keep_alive(KeepAlive::default()))
 }
 
+thread_local! {
+    static TEMPLATES: Option<TinyTemplate<'static>> = None;
+}
+
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn state(mut user_session: UserSession<Authenticated>) -> Result<impl IntoResponse> {
-    user_session.session.state(user_session.auth).await
+    let view = user_session.session.view(user_session.auth).await;
+    Ok(view)
 }
 
 #[serde_as]
@@ -172,21 +187,26 @@ async fn playable(
         .session
         .playable(user_session.auth, cards)
         .await;
-
-    Ok(match playable {
-        Ok(play) if play.is_pass() => {
-            html! { <button class="playable-ok" type="submit" hx-post="./api/play" title="pass">"pass"</button> }
-        }
-        Ok(_play) => {
-            html! { <button class="playable-ok" type="submit" hx-post="./api/play" title="play">"play"</button> }
-        }
-        Err(Error::NotCurrent) => {
-            html! { <button class="playable-off-turn" type="submit" hx-post="./api/play" title="play" disabled>"play"</button> }
-        }
-        Err(Error::PlayError(e)) => {
-            html! { <button class="playable-error" type="submit" hx-post="./api/play" title={e.to_string()} disabled>"play"</button> }
-        }
-        Err(e) => return Err(e),
+    let label = if cards.is_empty() { "pass" } else { "play" };
+    let off_turn = matches!(playable, Err(Error::NotCurrent));
+    Ok(match playable.as_ref() {
+        Ok(_play) => HtmlBuf::default()
+            .node("button", |h| h
+                .a("type", "submit")
+                .a("id", "play-button")
+                .a("hx-post", "api/play")
+                .a("hx-include", "#cards-to-play")
+                .text(label)
+            ),
+        Err(error) => HtmlBuf::default()
+            .node("button", |h| h
+                .a("type", "submit")
+                .a("id", "play-button")
+                .a("disabled", "")
+                .a("title", format!("{}", error))
+                .a("class", if off_turn { "playable-off-turn" } else { "playable-error" })
+                .text(label)
+            ),
     })
 }
 
@@ -200,7 +220,7 @@ async fn play(
         .session
         .human_play(user_session.auth, cards)
         .await
-}
+} 
 
 struct ApiState {
     sessions: HashMap<SessionId, Arc<Mutex<Session>>>,
@@ -246,21 +266,21 @@ impl ApiState {
         session: Weak<Mutex<Session>>,
         auth: Authenticated,
     ) {
-        let mut interval = interval(INACTIVE_BEFORE_DISCONNECT);
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        let session = loop {
-            interval.tick().await;
+        let session_is_empty = loop {
             let Some(session) = session.upgrade() else {
                 return;
             };
             let mut session = session.lock_owned().await;
-            if session.inactive_disconnect(auth).await.is_break() {
-                break session;
+            match session.inactive_disconnect(auth).await {
+                ControlFlow::Continue(active_until) => {
+                    drop(session);
+                    sleep_until(active_until).await;
+                }
+                ControlFlow::Break(()) => break session.is_empty(),
             }
         };
 
-        if session.is_empty() {
+        if session_is_empty {
             let Some(this) = this.upgrade() else { return };
             let mut this = this.lock().await;
             this.sessions.remove(&auth.session_id);
@@ -278,7 +298,7 @@ struct Session {
     timer: Option<Duration>,
     deadline: Option<Instant>,
     phase: Phase,
-    card_id_cypher: HashMap<Card, String>,
+    card_id_cypher: HashMap<Card, u8>,
     game_state: GameState,
     humans: SeatMap<Option<Human>>,
     this: Weak<Mutex<Session>>,
@@ -286,10 +306,8 @@ struct Session {
 
 impl Session {
     pub fn new() -> Arc<Mutex<Self>> {
-        Arc::new_cyclic(move |this| {
-            let mut card_id_cypher: Vec<_> = (0..52)
-                .map(|card| format!("card-id-cypher-{}", card))
-                .collect();
+        Arc::new_cyclic(|this| {
+            let mut card_id_cypher: Vec<_> = (0..52).collect();
             card_id_cypher.shuffle(&mut thread_rng());
             let card_id_cypher = Cards::ENTIRE_DECK.into_iter().zip(card_id_cypher).collect();
             Mutex::new(Self {
@@ -339,14 +357,14 @@ impl Session {
         self.humans.iter().all(|(_, human)| human.is_none())
     }
 
-    pub async fn inactive_disconnect(&mut self, auth: Authenticated) -> ControlFlow<()> {
+    pub async fn inactive_disconnect(&mut self, auth: Authenticated) -> ControlFlow<(), Instant> {
         let Some(human) = self.humans[auth.seat].as_mut() else {
             return ControlFlow::Break(());
         };
-        let is_active =
-            Instant::now().duration_since(human.last_active) < INACTIVE_BEFORE_DISCONNECT;
+        let active_until = human.last_active + INACTIVE_BEFORE_DISCONNECT;
+        let is_active = Instant::now() <= active_until;
         if is_active {
-            return ControlFlow::Continue(());
+            return ControlFlow::Continue(active_until);
         }
         if human.host {
             let new_host = self
@@ -403,129 +421,180 @@ impl Session {
         Ok(Authenticated { auth })
     }
 
-    pub async fn state(&mut self, auth: Authenticated) -> Result<Node> {
-        Ok(html! {
-            <img class="table" alt="" />
-            <section class="table">
-                <div class="cards">
-                { self.game_state
-                    .cards_on_table()
-                    .map(Play::cards)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|card| html! {
-                        <div class="card" id={&self.card_id_cypher[&card]}>
-                            <img src={format!("./cards/{card}.svg")} alt={&card}>
-                        </div>
-                    })
-                }
-                </div>
-            </section>
+    pub async fn view(&mut self, auth: Authenticated) -> HtmlBuf {
+        let game_state = &self.game_state;
+        let phase = self.phase;
+        let table_cards = self.game_state.cards_on_table().map(Play::cards).unwrap_or_default();
+        let card_id_cypher = &self.card_id_cypher;
 
-            { Relative::ALL
-                .into_iter()
-                .map(|relative| {
-                    let seat = auth.seat.relative(relative);
-                    let is_hosting = self.is_host(seat);
-                    let my_player = seat == auth.seat;
-
-                    let host_controls = if matches!(self.phase, Phase::Lobby) && my_player && is_hosting {
-                        html! {
-                            <form id="timer-controls">
-                                <label>
-                                    "enable action timer"
-                                    <input type="checkbox" name="enable-timer" hx-trigger="load, change" hx-include="#timer-controls" hx-put="./api/timer" />
-                                </label>
-                                <input type="range" min="1" max="120000" value="30000" name="timer-value" hx-trigger="load, change" hx-include="#timer-controls" hx-put="./api/timer" />
-                            </form>
-                            <button hx-post="./api/start">"start the game"</button>
-                        }
-                    } else {
-                        html! {}
-                    };
-
-                    let cards = self.game_state.hand(seat);
-                    let cards = match (self.phase, my_player) {
-                        (Phase::Lobby, _) => html! {},
-                        (Phase::Active | Phase::Post, true) => html! {
-                            <form>
-                                <div class="cards">
-                                { cards.into_iter()
-                                    .map(|card| {
-                                        html! {
-                                            <label class="card" id={&self.card_id_cypher[&card]}>
-                                                <input type="checkbox" name={&card} value={&card} hx-trigger="change" hx-post="./api/playable" hx-target="next button" hx-swap="outerHTML">
-                                                <img src={format!("./cards/{card}.svg")} alt={&card}>
-                                            </label>
-                                        }
-                                    })
-                                }
-                                </div>
-                                <button hx-trigger="load" hx-post="./api/playable" hx-swap="outerHTML"></button>
-                            </form>
-                        },
-                        (Phase::Active | Phase::Post, false) => html! {
-                            <div class="cards">
-                            { cards.into_iter()
-                                .map(|card| {
-                                    html! {
-                                        <label class="card" id={&self.card_id_cypher[&card]}>
-                                            <img src="./cards/back.svg" alt="hidden card">
-                                        </label>
-                                    }
-                                })
-                            }
-                            </div>
-                        },
-                    };
-
-                    let load = if matches!(self.phase, Phase::Active | Phase::Post) {
-                        html! { {text!("{}", self.game_state.hand(seat).len())} }
-                    } else {
-                        html! {}
-                    };
-                    let bot = if self.is_human(seat) {
-                        html! { }
-                    } else {
-                        html! { <img src="./bot.svg" alt="bot player" /> }
-                    };
-                    let turn = if matches!(self.phase, Phase::Active) && self.game_state.current_player() == seat {
-                        html! { <img src="./turn.svg" alt="player's turn" /> }
-                    } else {
-                        html!{ }
-                    };
-                    let pass = if matches!(self.phase, Phase::Active) && self.game_state.passed(seat) {
-                        html! { <img src="./pass.svg" alt="player passed" /> }
-                    } else {
-                        html! { }
-                    };
-                    let control = if matches!(self.phase, Phase::Active) && self.game_state.has_control(seat) {
-                        html! { <img src="./control.svg" alt="player has control" /> }
-                    } else {
-                        html! {}
-                    };
-                    let win = if self.game_state.winning_player() == Some(seat) {
-                        html! { <img src="./win.svg" alt="player win" /> }
-                    } else {
-                        html! { }
-                    };
-                    html! {
-                        <section class=format!("player {}", relative)>
-                            <h2 class="name">{text!("{}", seat)}</h2>
-                            <div class="load">{text!("{}", load)}</div>
-                            <div class="bot">{ bot }</div>
-                            <div class="timer"> </div>
-                            <div class="turn">{ turn }</div>
-                            <div class="pass">{ pass }</div>
-                            <div class="control">{ control }</div>
-                            <div class="win">{ win }</div>
-                            <div class="host-controls">{ host_controls }</div>
-                            <div class="cards-form">{ cards }</div>
-                        </section>
-                    }
+        let template_hidden = |html: HtmlBuf, relative: Relative| -> HtmlBuf {
+            let seat = auth.seat.relative(relative);
+            html
+                .node("div", |h| {
+                    let h = h.a("class", format!("cards player {}", relative));
+                    let cards = matches!(phase, Phase::Active | Phase::Post)
+                        .then(|| game_state.hand(seat).into_iter().map(|card| card_id_cypher[&card].clone()).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    cards.into_iter().fold(h, |h, card| h
+                        .node("label", |h| h
+                            .a("class", "card")
+                            .a("id", format!("card_id_cypher-{}", card))
+                            .node("img", |h| h
+                                .a("src", "cards/back.svg")
+                                .a("alt", "hidden card")
+                            )
+                        )
+                    )
                 })
-            }
-        })
+        };
+        let template_info = |html: HtmlBuf, relative: Relative| -> HtmlBuf {
+            let seat = auth.seat.relative(relative);
+            let load = matches!(phase, Phase::Active | Phase::Post).then(|| game_state.hand(seat).len()).unwrap_or(13);
+            let is_human = self.is_human(seat);
+            let control = matches!(phase, Phase::Active) && game_state.has_control(seat);
+            let played = matches!(phase, Phase::Active) && game_state.played(seat);
+            let winning = game_state.winning_player() == Some(seat);
+            let turn = matches!(phase, Phase::Active) && game_state.current_player() == seat;
+            let host_controls = matches!(phase, Phase::Lobby) && relative == Relative::My && self.is_host(seat);
+            let play_button = matches!(phase, Phase::Active) && relative == Relative::My;
+            html
+                .node("section", |h| h
+                    .a("class", format!("info {}", relative))
+                    .node("h2", |h| h
+                        .text(format!("{}", seat))
+                    )
+                    .node("div", |h| h
+                        .text(format!("{}", load))
+                    )
+                    .node("div", |h| h
+                        .map_if(!is_human, |h| h
+                            .node("img", |h| h
+                                .a("src", "bot.svg")
+                                .a("alt", "player is bot")
+                            )
+                        )
+                    )
+                    .node("div", |h| h
+                        .node("progress", |h| h
+                            .a("max", "100")
+                        )
+                    )
+                    .node("div", |h| h
+                        .map_if(turn, |h| h
+                            .node("img", |h| h
+                                .a("src", "turn.svg")
+                                .a("alt", "player's turn")
+                            )
+                        )
+                    )
+                    .node("div", |h| h
+                        .map_if(winning, |h| h
+                            .node("img", |h| h
+                                .a("src", "turn.svg")
+                                .a("alt", "player's turn")
+                            )
+                        )
+                        .map_if(!winning && control, |h| h
+                            .node("img", |h| h
+                                .a("src", "control.svg")
+                                .a("alt", "player has control")
+                            )
+                        )
+                        .map_if(!winning && !control && played, |h| h
+                            .node("img", |h| h
+                                .a("src", "played.svg")
+                                .a("alt", "player played")
+                            )
+                        )
+                    )
+                    .node("div", |h| h
+                        .map_if(host_controls, |h| h
+                            .node("form", |h| h
+                                .node("label", |h| h
+                                    .text("enable action timer")
+                                    .node("input", |h| h
+                                        .a("type", "checkbox")
+                                        .a("name", "enable-timer")
+                                        .a("hx-trigger", "load, change")
+                                        .a("hx-include", "#timer-controls")
+                                        .a("hx-put", "api/timer")
+                                    )
+                                )
+                            )
+                            .node("button", |h| h
+                                .a("hx-post", "api/start")
+                                .text("start the game")
+                            )
+                        )
+                        .map_if(play_button, |h| h
+                            .node("button", |h| h
+                                .a("id", "play-button")
+                                .a("hx-trigger", "load")
+                                .a("hx-post", "api/playable")
+                                .a("hx-swap", "outerHTML")
+                                .text("play")
+                            )
+                        )
+                    )
+                )
+        };
+
+        HtmlBuf::default()
+            .node("div", |h| h
+                .a("class", "scene-wrap")
+                .node("div", |h| h
+                    .a("class", "scene")
+                    .node("section", |h| h
+                        .a("class", "table")
+                        .node("div", |h| {
+                            let h = h.a("class", "cards");
+                            table_cards.into_iter().fold(h, |h, card| h
+                                .node("div", |h| h
+                                    .a("class", "card")
+                                    .node("img", |h| h
+                                        .a("src", format!("cards/{}.svg", card))
+                                        .a("alt", format!("{}", card))
+                                    )
+                                )
+                            )
+                        })
+                    )
+                    .map(|h| template_hidden(h, Relative::Left))
+                    .map(|h| template_hidden(h, Relative::Across))
+                    .map(|h| template_hidden(h, Relative::Right))
+                )
+                .map(|h| template_info(h, Relative::My))
+                .map(|h| template_info(h, Relative::Left))
+                .map(|h| template_info(h, Relative::Across))
+                .map(|h| template_info(h, Relative::Right))
+                .node("div", |h| {
+                    let h = h
+                        .a("id", "cards-to-play")
+                        .a("class", "cards player my");
+                    let my_cards = matches!(self.phase, Phase::Active | Phase::Post)
+                        .then_some(self.game_state.hand(auth.seat))
+                        .unwrap_or_default();
+                    my_cards.into_iter().fold(h, |h, card| h
+                        .node("label", |h| h
+                            .a("class", "card")
+                            .node("input", |h| h
+                                .a("type", "checkbox")
+                                .a("name", format!("{}", card))
+                                .a("value", format!("{}", card))
+                                .a("hx-trigger", "change")
+                                .a("hx-post", "api/playable")
+                                .a("hx-include", "#cards-to-play")
+                                .a("hx-target", "#play-button")
+                                .a("hx-swap", "outerHTML")
+                            )
+                            .node("img", |h| h
+                                .a("src", format!("cards/{}.svg", card))
+                                .a("alt", format!("{}", card))
+                            )
+                        )
+                    )
+                })
+            )
     }
 
     pub async fn timer(&mut self, _auth: HostAuthenticated, timer: Option<Duration>) -> Result<()> {
@@ -626,10 +695,8 @@ impl Session {
             if !matches!(this.phase, Phase::Active) {
                 return;
             }
-            let cards = choose_play(&this.game_state).cards;
-            this.play(cards)
-                .await
-                .expect("our bots should always choose valid plays");
+            let cards = choose_play(&this.game_state).cards();
+            let _ = this.play(cards).await;
         })
     }
 
@@ -652,6 +719,21 @@ impl Session {
     fn is_human(&self, seat: Seat) -> bool {
         self.humans[seat].is_some()
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct PlayerView {
+    seat: Seat,
+    relative: Relative,
+    human: bool,
+    cards: Option<Vec<u8>>,
+    load: Option<usize>,
+    control: bool,
+    turn: bool,
+    played: bool,
+    winning: bool,
+    host_controls: bool,
+    play_button: bool, 
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
@@ -791,12 +873,12 @@ impl IntoResponseParts for Unauthenticated {
     type Error = Infallible;
     fn into_response_parts(self, res: ResponseParts) -> Result<ResponseParts, Self::Error> {
         let auth = serde_urlencoded::to_string(self).unwrap();
-        let cookie = Cookie::build("auth", auth)
+        let cookie = Cookie::build(("auth", auth))
             .secure(true)
             .http_only(true)
             .expires(Expiration::Session)
             .same_site(SameSite::Strict)
-            .finish();
+            .build();
         let jar = CookieJar::new().add(cookie);
         jar.into_response_parts(res)
     }

@@ -3,8 +3,11 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use serde_with::SerializeDisplay;
-use std::cmp::Ordering;
-use std::fmt::{self, Display};
+use std::{
+    cmp::Ordering,
+    fmt::{self, Display},
+    ops,
+};
 
 #[derive(Debug)]
 pub struct GameState {
@@ -12,14 +15,7 @@ pub struct GameState {
     current_player: Seat,
     cards_on_table: Option<Play>,
     last_player_to_not_pass: Seat,
-    passed: SeatMap<bool>,
     winning_player: Option<Seat>,
-}
-
-impl Default for GameState {
-    fn default() -> GameState {
-        GameState::new()
-    }
 }
 
 impl GameState {
@@ -42,7 +38,6 @@ impl GameState {
             current_player,
             cards_on_table: None,
             last_player_to_not_pass: current_player,
-            passed: SeatMap::default(),
             winning_player: None,
         }
     }
@@ -55,6 +50,10 @@ impl GameState {
     }
 
     pub fn playable(&self, cards: Cards) -> Result<Play, PlayError> {
+        if self.winning_player.is_some() { 
+            return Err(PlayError::AlreadyOver);
+        }
+
         let play = Play::infer(cards).ok_or(PlayError::NonsenseCards)?;
 
         if !cards.is_subset(self.hands[self.current_player]) {
@@ -69,7 +68,7 @@ impl GameState {
             };
         }
 
-        if self.has_control(self.current_player()) {
+        if self.has_control(self.current_player) {
             return if play.is_pass() {
                 Err(PlayError::MustPlayOnControl)
             } else {
@@ -104,15 +103,12 @@ impl GameState {
             self.winning_player = Some(self.current_player);
         }
 
-        if play.is_pass() {
-            self.passed[self.current_player] = true;
-        } else {
+        if !play.is_pass() {
             self.last_player_to_not_pass = self.current_player;
             self.cards_on_table = Some(play);
         }
 
         self.current_player = self.current_player.next();
-        self.passed[self.current_player] = false;
 
         Ok(play)
     }
@@ -121,8 +117,8 @@ impl GameState {
         self.winning_player
     }
 
-    pub fn passed(&self, seat: Seat) -> bool {
-        self.passed[seat]
+    pub fn played(&self, seat: Seat) -> bool {
+        self.last_player_to_not_pass == seat
     }
 
     pub fn has_control(&self, seat: Seat) -> bool {
@@ -137,10 +133,6 @@ impl GameState {
         self.hands[seat]
     }
 
-    //    pub fn my_hand(&self) -> Cards {
-    //        self.hand(self.current_player)
-    //    }
-
     pub fn current_player(&self) -> Seat {
         self.current_player
     }
@@ -152,6 +144,7 @@ impl GameState {
 
 #[derive(SerializeDisplay, Debug)]
 pub enum PlayError {
+    AlreadyOver,
     NonsenseCards,
     DontHaveCard,
     IsntPlayingThreeOfClubs,
@@ -163,12 +156,13 @@ pub enum PlayError {
 impl fmt::Display for PlayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PlayError::NonsenseCards => write!(f, "nonsense cards"),
-            PlayError::DontHaveCard => write!(f, "don't have card to play"),
-            PlayError::IsntPlayingThreeOfClubs => write!(f, "must play three of clubs"),
-            PlayError::TooLow => write!(f, "play not high enough"),
-            PlayError::WrongLength => write!(f, "wrong length"),
-            PlayError::MustPlayOnControl => write!(f, "must play on control"),
+            Self::AlreadyOver => write!(f, "the game is already over"),
+            Self::NonsenseCards => write!(f, "nonsense cards"),
+            Self::DontHaveCard => write!(f, "don't have card to play"),
+            Self::IsntPlayingThreeOfClubs => write!(f, "must play three of clubs"),
+            Self::TooLow => write!(f, "play not high enough"),
+            Self::WrongLength => write!(f, "wrong length"),
+            Self::MustPlayOnControl => write!(f, "must play on control"),
         }
     }
 }
@@ -217,22 +211,16 @@ impl Display for Seat {
 
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Default, Serialize, Deserialize)]
 pub struct SeatMap<T> {
-    inner: [T; 4],
+    inner: [T; Seat::ALL.len()],
 }
 
 impl<T> SeatMap<T> {
     pub fn iter(&self) -> impl Iterator<Item = (Seat, &'_ T)> {
-        self.inner
-            .iter()
-            .zip(0..)
-            .map(|(item, i)| (Seat::from_i8(i), item))
+        Seat::ALL.into_iter().zip(self.inner.iter())
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (Seat, &'_ mut T)> {
-        self.inner
-            .iter_mut()
-            .zip(0..)
-            .map(|(item, i)| (Seat::from_i8(i), item))
+        Seat::ALL.into_iter().zip(self.inner.iter_mut())
     }
 }
 
@@ -243,7 +231,6 @@ impl<T> ops::Index<Seat> for SeatMap<T> {
     }
 }
 
-use std::ops;
 impl<T> ops::IndexMut<Seat> for SeatMap<T> {
     fn index_mut(&mut self, seat: Seat) -> &mut Self::Output {
         &mut self.inner[seat as usize]
@@ -251,15 +238,12 @@ impl<T> ops::IndexMut<Seat> for SeatMap<T> {
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Relative {
     My,
     Left,
     Across,
     Right,
-}
-
-impl Relative {
-    pub const ALL: [Self; 4] = [Self::My, Self::Left, Self::Across, Self::Right];
 }
 
 impl Display for Relative {

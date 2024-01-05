@@ -108,11 +108,12 @@ async fn connect(
         )
         .node("div", |h| h
             .a("hx-ext", "sse")
+            .a("hx-ext", "morph")
             .a("sse-connect", "api/subscribe")
             .node("main", |h| h
                 .a("hx-trigger", "load, sse:message")
                 .a("hx-get", "api/state")
-                .a("hx-swap", "innerHTML")
+                .a("hx-swap", "morph:innerHTML")
             )
             .node("div", |h| h
                 .map_some(reconnect_reason, |h, reconnect_reason| h
@@ -490,8 +491,8 @@ impl Session {
                     .node("div", |h| h
                         .map_if(winning, |h| h
                             .node("img", |h| h
-                                .a("src", "turn.svg")
-                                .a("alt", "player's turn")
+                                .a("src", "win.svg")
+                                .a("alt", "player won")
                             )
                         )
                         .map_if(!winning && control, |h| h
@@ -510,14 +511,25 @@ impl Session {
                     .node("div", |h| h
                         .map_if(host_controls, |h| h
                             .node("form", |h| h
+                                .a("id", "timer-controls")
+                                .a("hx-put", "api/timer")
+                                .a("hx-trigger", "load, input")
+                                .a("hx-swap", "none")
                                 .node("label", |h| h
                                     .text("enable action timer")
                                     .node("input", |h| h
                                         .a("type", "checkbox")
                                         .a("name", "enable-timer")
-                                        .a("hx-trigger", "load, change")
-                                        .a("hx-include", "#timer-controls")
-                                        .a("hx-put", "api/timer")
+                                    )
+                                )
+                                .node("label", |h| h
+                                    .text("timer value")
+                                    .node("input", |h| h
+                                        .a("type", "range")
+                                        .a("min", "5000")
+                                        .a("value", "5000")
+                                        .a("max", "200000")
+                                        .a("name", "timer-value")
                                     )
                                 )
                             )

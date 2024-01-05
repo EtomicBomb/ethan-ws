@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+
+<html lang="en-US">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<base href=".">
+<script src="/applab/compat.js"></script>
+<title>Minesweeper</title>
+<link rel="stylesheet" href="/applab/compat.css">
+<link rel="stylesheet" href="index.css">
+</head>
+
+<body>
+
+<div class="applab-container">
+<section id="title" tabIndex="-1" style="display: block;">
+<button id="titleRules"></button>
+<button id="titlePlay"></button>
+</section>
+
+<section id="game" oncontextmenu="return false;">
+<button id="gameTitle"></button>
+<button id="gameRules"></button>
+</section>
+
+<section id="lose">
+<button id="loseTitle"></button>
+<button id="loseRules"></button>
+</section>
+
+<section id="rules">
+<button id="rulesTitle"></button>
+<button id="rulesPlay"></button>
+</section>
+
+<section id="win">
+<button id="winTitle"></button>
+<p id="score"></p>
+</section>
+
+</div>
+
+<script src="index.js"></script>
+</body>

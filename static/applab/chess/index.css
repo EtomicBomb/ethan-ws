@@ -1,0 +1,62 @@
+section {
+    user-select: none;
+}
+
+#gameNameLabel {
+    left: 85px;        
+    font-size: 4em;
+}
+
+#usernameInput {
+    top: 90px;
+    left: 80px;
+}
+
+#startGameError {
+    top: 380px;
+}
+
+#gotoStartGameScreen {
+    top: 150px;
+    left: 115px;
+    padding: 1em;
+}
+
+#gotoJoinGameScreen {
+    left: 120px;
+    padding: 1em;
+    top: 250px;
+}
+
+#lobbyLabel {
+    font-size: 3rem;
+}
+
+#waitingLabel {
+    top: 150px;
+}
+    
+#panic {
+    background-color: pink;
+}
+
+#background {
+    width: 320px;
+    height: 450px;
+}
+
+#chatInput {
+    width: 320px;
+    height: 30px;
+    top: 30px;
+}
+
+#chatOutput {
+    width: 320px;
+    height: 63px;
+    top: 60px;
+}
+
+#pingLabel {
+    left: 220px;
+}

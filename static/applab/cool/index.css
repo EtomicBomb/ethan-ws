@@ -1,0 +1,138 @@
+button {
+    border: none;
+    background-color: transparent;
+}
+
+#start {
+    background-color: teal;
+    color: salmon;
+    font-family: 'Concert One';
+}
+
+.gameTitle {
+    font-size: 2rem;
+    padding: 0.3em 0.6em;
+}
+
+#usernameInput {
+    top: 70px;
+    left: 70px;
+}
+
+#display-options-label {
+    top: 70px;
+    font-size: 1rem;
+}
+
+#display-color-label {
+    top: 120px;
+    font-size: 1rem;
+}
+
+#display-image-label {
+    font-size: 1rem;
+    top: 140px;
+}
+
+#colorButton {
+    left: 150px;
+}
+
+#imageButton {
+    left: 150px;
+}
+
+#imageSample {
+    top: 110px;
+    left: 200px;
+    width: 50px;
+    height: 50px;
+}
+
+#spriteDropdown {
+    top: 180px;
+    visibility: hidden;
+}
+
+#redSlider {
+    top: 170px;
+}
+
+#greenSlider {
+    top: 190px;
+}
+
+#blueSlider {
+    top: 210px;
+}
+
+#redInput {
+    top: 170px;
+    left: 200px;
+}
+
+#greenInput {
+    top: 190px;
+    left: 200px;
+}
+
+#blueInput {
+    top: 210px;
+    left: 200px;
+}
+
+#usernameInUseError {
+    top: 400px;
+    visibility: hidden;
+}
+
+#playGameErrorLabel {
+    top: 400px;
+    visibility: hidden;
+}
+
+#playGameButton {
+    top: 250px;
+    padding: 0.4em 0.7em;
+    left: 30px;
+    font-size: 1.5rem;
+    background-color: white;
+    font-family: 'Concert One';
+    color: salmon;
+}
+
+#main {
+
+}
+
+#background {
+
+}
+
+#currentPlayers {
+    background-color: #00000080;
+    left: 0px;
+    width: 100px;
+    height: 100px;
+}
+
+#pingLabel {
+    background-color: #00000080;
+    width: 100px;
+    top: 105px;
+}
+
+#framesLabel {
+    background-color: #00000080;
+    width: 100px;
+    top: 125px;
+}
+
+#lose {
+
+}
+
+#deathMessage {
+
+}
+

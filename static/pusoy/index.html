@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en-US">
+    <head>
+        <title>Pusoy</title>
+        <meta charset="utf-8">
+        <link rel="stylesheet" href="index.css">
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <script src="htmx-1.9.10.js"></script>
+        <script src="htmx-sse-1.9.10.js"></script>
+        <script src="htmx-idiomorph-0.3.0.js"></script>
+    </head>
+    <body>
+        <div hx-trigger="load" hx-post="api/connect" hx-swap="outerHTML"></div>
+    </body>
+</html>
+

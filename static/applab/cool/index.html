@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+
+<html lang="en-US">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<base href=".">
+<script src="/applab/compat.js"></script>
+<title>Cool Game to Play</title>
+<link rel="stylesheet" href="index.css">
+<link rel="stylesheet" href="/applab/compat.css">
+</head>
+
+<body>
+
+<div class="applab-container">
+<section id="start" tabIndex="-1" style="display: block;">
+<h1 class="gameTitle">Cool game to play!</h1>
+
+<input id="usernameInput" placeholder="Choose a username" type="text">
+
+<label name="colorButton" id="display-color-label">
+    <input id="colorButton" type="radio" name="display" checked>
+    Choose a color
+</label>
+<label name="imageButton" id="display-image-label">
+    <input id="imageButton" type="radio" name="display">
+    or an image
+</label>
+
+<img id="imageSample">
+<select id="spriteDropdown">
+    <option>cell</option>
+    <option>diamond pickaxe</option>
+    <option>ask duck</option>
+    <option>queen elsa</option>
+    <option>poland ball</option>
+    <option>the foundation</option>
+    <option>donot eat !</option>
+</select>
+
+<input id="redSlider" type="range" min="0" max="255" value="0" step="1">
+<input id="greenSlider" type="range" min="0" max="255" value="0" step="1">
+<input id="blueSlider" type="range" min="0" max="255" value="0" step="1">
+
+<input id="redInput" type"text">
+<input id="greenInput" type"text">
+<input id="blueInput" type"text">
+<p id="usernameInUseError">please chose a username that isn't in use</p>
+<p id="playGameErrorLabel">please choose a valid username</p>
+<button id="playGameButton">Play</button>
+</section>
+
+<section id="main">
+<img id="background" src="assets/grid.png">
+<p id="currentPlayers">top players:</p>
+<p id="pingLabel">500 png</p>
+<p id="framesLabel">500 frames</p>
+</section>
+
+<section id="lose">
+<h1>You lost!</h1>
+<p id="deathMessage">You were eaten by</p>
+</section>
+
+</div>
+
+<script src=index.js></script>
+</body>

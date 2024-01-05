@@ -1,0 +1,32 @@
+@import url('/index.css');
+
+* {
+    position: absolute;
+    margin: 0;
+    left: 0;
+    top: 0;
+    background-size: contain;
+    background-repeat: no-repeat;
+}
+
+.applab-container {
+    overflow: hidden;
+    width: 320px;
+    height: 450px;
+}
+
+section {
+    position: relative;
+    width: 320px;
+    height: 450px;
+    display: none;
+    border: none;
+    user-select: none;
+}
+
+button {
+    border: none;
+    background-color: lightgray;
+    color: black;
+}
+

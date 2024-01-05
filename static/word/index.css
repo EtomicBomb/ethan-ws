@@ -1,0 +1,155 @@
+:root {
+    font-size: 16px;
+    box-sizing: border-box;
+    font-family: sans-serif;
+}
+
+*, *::before, *::after {
+    box-sizing: inherit;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+main {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+
+    container: main-wrap / inline-size;
+/*    display: grid;*/
+/*    grid-template: 1fr / 1fr;*/
+/*    place-items: center;*/
+}
+
+section {
+    height: 3em;
+}
+
+.tiles {
+/*    margin: 0 auto;*/
+
+    background: url('background.jpg');
+    background-clip: padding-box;
+
+/*    width: 100%;*/
+    max-width: 100cqh;
+/*    max-width: 100vh;*/
+    aspect-ratio: 1 / 1;
+
+    padding: 4%;
+
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-auto-rows: 1fr;
+    gap: 10%;
+
+    & > label {
+        background: url('tile-background.jpg');
+
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        font-size: 10vmin;
+        font-weight: bold;
+        box-shadow: 3px 3px 3px 3px;
+
+        user-select: none;
+
+        transition: scale 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+        &:hover {
+            scale: 1.05;
+        }
+
+        &:has(> input[value="0"]) { --order: 0; }
+        &:has(> input[value="1"]) { --order: 1; }
+        &:has(> input[value="2"]) { --order: 2; }
+        &:has(> input[value="3"]) { --order: 3; }
+        &:has(> input[value="4"]) { --order: 4; }
+        &:has(> input[value="5"]) { --order: 5; }
+        &:has(> input[value="6"]) { --order: 6; }
+        &:has(> input[value="7"]) { --order: 7; }
+        &:has(> input[value="8"]) { --order: 8; }
+        &:has(> input[value="9"]) { --order: 9; }
+        &:has(> input[value="10"]) { --order: 10; }
+        &:has(> input[value="11"]) { --order: 11; }
+        &:has(> input[value="12"]) { --order: 12; }
+        &:has(> input[value="13"]) { --order: 13; }
+        &:has(> input[value="14"]) { --order: 14; }
+        &:has(> input[value="15"]) { --order: 15; }
+
+        &:has(> input[value]) {
+            scale: 1.2;
+            --hue: calc(22.5 + 22.5 * var(--order));
+            color: oklch(71.66% 0.1 var(--hue));
+        }
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+        &.valid-word > label:has(> input[value]) {
+            animation: 300ms ease-in 0s happy-dance;
+        }
+    }
+
+    &.valid-word > label:has(> input[value]) {
+        color: oklch(71.66% 0.2 var(--hue));
+    }
+}
+
+
+@keyframes happy-dance {
+    to { rotate: 359deg; }
+}
+
+.spelled-word {
+    display: flex;
+    gap: 2em;
+    flex-direction: row;
+    justify-content: space-between;
+}
+
+.spelled {
+    pointer-events: none;
+    position: absolute;
+    left: 50%;
+    top: 20%;
+    translate: -50% 0;
+
+    padding: 1em 2em;
+    border-radius: 1em;
+    background-color: oklch(0% 0 0 / 0.5);
+    color: white;
+
+    & > .spelled-word {
+        visibility: hidden;
+    }
+
+    & > .spelled-word.htmx-added {
+        visibility: visible;
+    }
+}
+
+.clock {
+    height: 1em;
+    width: 10em;
+    border: 3px solid black;
+    border-radius: 4px;
+    & > * {
+        height: 100%;
+        width: 0%;
+        animation-timing-function: linear;
+        animation-delay: 0s;
+        animation-name: clock;
+    }
+}
+
+@keyframes clock {
+    to {
+        width: 100%;
+    }
+}

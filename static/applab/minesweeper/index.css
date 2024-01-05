@@ -1,0 +1,95 @@
+button {
+    border: none;
+    background-color: transparent;
+}
+
+#title {
+    background-image: url(assets/title.svg.png);
+}
+
+#titleRules {
+    width: 200px;
+    height: 85px;
+    left: 65px;
+    top: 295px;
+}
+
+#titlePlay {
+    width: 200px;
+    height: 85px;
+    left: 65px;
+    top: 135px;
+}
+
+#game {
+    background-image: url(assets/minesweeper.svg.png);
+}
+
+#gameTitle {
+    width: 80px;
+    height: 50px;
+}
+
+#gameRules {
+    width: 80px;
+    height: 45px;
+    left: 240;
+}
+
+#lose {
+    background-image: url(assets/lose.svg.png);
+}
+
+#loseTitle {
+    width: 180px;
+    height: 75px;
+    left: 120px;
+    top: 190px;
+}
+
+#loseRules {
+    width: 175px;
+    height: 75px;
+    left: 65px;
+    top: 325px;
+}
+
+#rules {
+    background-image: url(assets/rules.svg.png);
+}
+
+#rulesTitle {
+    width: 150px;
+    height: 70px;
+    left: 5px;
+    top: 370px;
+}
+
+#rulesPlay {
+    width: 150px;
+    height: 70px;
+    left: 170px;
+    top: 370px;
+}
+
+#win {
+    background-image: url(assets/win.svg.png);
+}
+
+#winTitle {
+    width: 195px;
+    height: 75px;
+    left: 60px;
+    top: 320px;
+}
+
+#score {
+    color: black;
+    font-family: sans-serif;
+    width: 190px;
+    height: 45px;
+    left: 110px;
+    top: 170px;
+    font-size: 50px;
+    text-align: left;
+

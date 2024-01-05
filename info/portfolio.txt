@@ -1,0 +1,51 @@
+https://max-heller.com/
+https://jedfox.com/
+https://jasoneveleth.com/
+
+Include city names in horizontal banner
+* Los Angeles * Providence * Vancouver * 
+
+Include context, class year (ie was the project created when I was a highschool freshman, etc?)
+
+Graphing Calculator E-Reader (December 2016)
+Technologies: TI-Basic, Perl, z80 Assembly (light)
+Story: 8th grade invention project, allowed you to look like you were paying attention in class / doing work while you were actually reading a book.
+Perl script converts .txt file from Project Gutenberg into a series of "programs" that could be loaded onto the graphing calculator. Main interactive reader program (TI-Basic) dynamically loads relevent text chunks out of archive memory working around the limited memory of the calculator. What was the z80 assembly for?
+
+AppLab (code.org) minigames -
+The programming environment was constrained in that the code runs at a fraction of the speed of Javascript in a browser, cannot include arbitrary HTML. 
+to a small subset of javascript, multiplayer functionality created from whole cloth. Network code refactored to work with instead of ethan.ws backend (instead of the highscore storing functionality that was hacked to make work with these games) 
+Restoration process included refactoring the original netcode (which was hacked around AppLab's high score storing functionality) to work with ethan.ws backend.
+
+Minesweeper (August 2018)
+Story: First significant project using javascript
+https://studio.code.org/projects/applab/I-h-qaZKD3GODHu_1QsMHRt0OCw_G5zo_m-mEULDWtA/
+
+TypeTester (May 2018)
+Technologies: Javascript, Perl (to construct typing sample)
+Story: final project, made with Zachary Feldmar
+https://studio.code.org/projects/applab/TkuIfHa6FV9nSNL6rTtAVziN5KCsxX15hBSyoeVUUM0/
+
+Bounce (February 2019)
+Technologies: Javascript
+Story: Made in the spare time while our fabrication / design team was busy working on things 
+Obstacles: 
+https://studio.code.org/projects/applab/ICaQiwnVXkQaLCiI3c_ot2u306IB37JzZlKz7l3jDtY/
+
+Chess (January 2019)
+https://studio.code.org/projects/applab/eCJEiuHoncMYerh6bbyVf86-5OFF6rji3Snxl3bwZ9U/
+
+Ramming Speed (December 2018)
+Technologies: Rust, Javascript
+Story: Unfinished, custom collision detection engine, optimized for constrained environment, perlin noise to generate terrain with Rust script, created custom data format to export to work in code.org browser
+https://studio.code.org/projects/applab/gaDoiE1KCDDSjcA2bXGfWl-bD0gQ2lHKLNS8XjjwxCE/
+
+False 3d Renderer (September 2019)
+Technologies: Javascript
+Story: because of the code.org App Lab's speed limitation, traditional raster graphics is infeasible. Code was optimized to run performantly on this platform. Later columns / frame was increased in this demo.
+https://studio.code.org/projects/applab/-qlFDWB0SjWndHxShKUpkNOeLX0pH6q_0OyqmBMSmDo/
+
+Cool Game To Play (June 2021)
+Technologies: Javascript
+Story: started making the game after class, had other students in class play the game
+Story: agar.io clone, interpolation between item position done, custom rate limiting functionality createdhttps://studio.code.org/projects/applab/1EdNmI2mj85-X4RmMVoQw8_B8uF-aMPJ7o3YO4jKtMw/

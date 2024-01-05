@@ -1,0 +1,196 @@
+*, *::before, *::after {
+    box-sizing: inherit;
+}
+
+:root {
+    font-family: sans;
+    box-sizing: border-box;
+    color: oklch(39% 0 0);
+    overflow: hidden;
+    text-align: center;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+}
+
+h1, h2 {
+    margin: 0;
+}
+
+input {
+    font-size: inherit;
+}
+
+a {
+    color: oklch(53% 0.11 230);
+}
+
+.info {
+    background-color: oklch(0% 0 0 / 0.1);
+    border: 2px solid oklch(0% 0 0 / 0.1);
+    border-radius: 2em;
+    padding: 1em;
+
+    position: fixed;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+
+    &.my {
+        bottom: 5vh;
+        left: 10vw;
+    }
+
+    &.left {
+        top: 30vh;
+        left: 5vw;
+    }
+
+    &.across {
+        top: 5vh;
+        left: 50vw;
+    }
+
+    &.right {
+        top: 30vh;
+        right: 5vw;
+    }
+
+    & > * {
+        grid-area: span 1;
+        width: 3em;
+        aspect-ratio: 1;
+
+        display: flex;
+        align-items: center;
+        justify-content: center; 
+
+        & > * {
+            width: 100%;
+            height: 100%;
+        }
+    }
+
+    & > h2 {
+        grid-area: auto / span 4;
+    }
+}
+
+#cards-to-play {
+    position: fixed;
+    bottom: 5vh;
+    left: 30vw;
+}
+
+.scene-wrap {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+
+    --perspective: 800px;
+    --rx: -60deg;
+    --ry: 0deg;
+    --rz: 0deg;
+    --tx: 0px;
+    --ty: 200px;
+    --tz: -900px;
+    perspective: 800px;
+}
+
+.scene {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    font-size: 160px;
+
+    transform-style: preserve-3d;
+    transform: 
+        translate3d(var(--tx), var(--ty), var(--tz))
+        rotateX(var(--rx)) rotateY(var(--ry)) rotateZ(var(--rz))
+    ;
+
+    & .table {
+        position: absolute;
+        width: 1600px;
+        height: 1600px;
+        background-image: linear-gradient(0deg, green, lime);
+        transform: rotateX(90deg);
+
+        transform-style: preserve-3d;
+
+        display: flex;
+        flex-wrap: wrap;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+
+        & .cards {
+            transform: scale(1.4);
+        }
+    }
+
+    & .player {
+        transform-style: preserve-3d;
+        position: absolute;
+
+        &.left {
+            transform: translateY(-50%) rotateY(270deg) translateZ(900px) rotateY(-45deg);
+        }
+
+        &.across {
+            transform: translateY(-50%) rotateY(180deg) translateZ(900px);
+        }
+
+        &.right {
+            transform: translateY(-50%) rotateY(90deg) translateZ(900px) rotateY(45deg);
+        }
+    }
+}
+
+.cards {
+    transform-style: preserve-3d;
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+}
+
+.card {
+    margin: -50px; 
+    position: relative;
+    display: block;
+    aspect-ratio: 209 / 303;
+    width: 160px;
+
+    & img {
+        position: relative;
+        padding: 0;
+        margin: 0;
+        border: none;
+    }
+}
+
+.my .card input[type="checkbox"] {
+    display: none;
+
+    &:checked + img {
+        top: -160px;
+    }
+
+    & + img:hover {
+        box-shadow: 0 0 15px 15px yellow;
+    }
+}
+
+.playable-off-turn {
+    text-decoration: line-through;
+}
+
+.playable-error {
+    color: red;
+}

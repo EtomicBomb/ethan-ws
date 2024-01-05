@@ -1,0 +1,40 @@
+section {
+    width: 320px;
+    height: 450px;
+    position: relative;
+    display: none;
+    border: 3px solid black;
+    user-select: none;
+}
+
+:not(section) {
+    position: absolute;
+    left: 0;
+    top: 0;
+}
+
+#cannon {
+    top: 405px;
+    left: 135px;
+    width: 50px;
+    height: 50px;
+}
+
+#scoreLabel {
+    top: 410px;
+    left: 5px;
+}
+
+#yourScore {
+    top: 60px;
+}
+
+#highScoresLabel {
+    top: 100px;
+    width: 300px;
+    height: 300px;
+}
+
+#playAgain {
+    top: 40px;
+}

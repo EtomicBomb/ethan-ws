@@ -1,7 +1,6 @@
 use {
     crate::{
-        html::{HtmlBuf},
-        hx,
+        htmx::{HtmlBuf, self},
     },
     async_trait::async_trait,
     axum::{
@@ -10,24 +9,24 @@ use {
         response::{
             sse::{self, KeepAlive, Sse},
             IntoResponse, Response, 
+            IntoResponseParts, ResponseParts
         },
         routing::{get, post, put},
         Form, RequestPartsExt, Router, 
     },
-    axum_core::response::{IntoResponseParts, ResponseParts},
     axum_extra::{
         TypedHeader,
         extract::CookieJar,
     },
     cookie::{Cookie, Expiration, SameSite},
     futures::future::BoxFuture,
-    http::{request::Parts, status::StatusCode},
-    once_cell::{sync::Lazy};
-    rand::{seq::SliceRandom, thread_rng, Rng, distributions::weighted::WeightedIndex},
+    http::{request::Parts, status::StatusCode, HeaderValue},
+    once_cell::{sync::Lazy},
+    rand::{seq::SliceRandom, thread_rng, Rng, distributions::{Distribution, weighted::WeightedIndex}},
     serde::{Deserialize, Serialize},
     serde_with::{serde_as, DurationMilliSeconds},
     std::{
-        collections::HashMap,
+        collections::{HashSet, HashMap, VecDeque},
         convert::Infallible,
         fmt::{self},
         ops::{ControlFlow, Deref},
@@ -35,6 +34,9 @@ use {
         sync::Arc,
         sync::Weak,
         time::Duration,
+        iter,
+        cmp,
+        fs,
     },
     tokio::{
         sync::mpsc::{self, UnboundedSender},
@@ -50,22 +52,24 @@ use {
 const BOT_ACTION_TIMER: Duration = Duration::from_secs(1);
 const INACTIVE_BEFORE_DISCONNECT: Duration = Duration::from_secs(60);
 
+#[allow(dead_code)]
 pub fn api<S>() -> Router<S> {
     Router::new()
         .route("/connect", post(connect))
+        .route("/render", post(render))
         .route("/wait-lobby", get(wait_lobby))
         .route("/start", post(start))
         .route("/score", get(score))
         .route("/spell", put(spell))
         .route("/clear", post(clear))
-        .with_state(ApiState::new())
+        .with_state(Arc::new(Mutex::new(ApiState::new())))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn connect(
     State(state): State<Arc<Mutex<ApiState>>>,
     user_session: Option<UserSession<Authenticated>>,
-    TypedHeader(hx::request::CurrentUrl(mut url)): TypedHeader<hx::request::CurrentUrl>,
+    TypedHeader(htmx::request::CurrentUrl(mut url)): TypedHeader<htmx::request::CurrentUrl>,
 ) -> Result<impl IntoResponse> {
     let url_session_id = url
         .query_pairs()
@@ -76,7 +80,7 @@ async fn connect(
     // if they don't agree, or there is no cookie session, try to join the one in the url
     // if there is no session at all, join a new game
     let mut state = state.lock().await;
-    let (auth, reconnect_reason) = match (user_session, url_session_id) {
+    let (auth, _reconnect_reason) = match (user_session, url_session_id) {
         (Some(user_session), Some(url_session_id))
             if user_session.auth.session_id == url_session_id =>
         {
@@ -99,16 +103,30 @@ async fn connect(
         .clear()
         .append_pair("session_id", &format!("{}", auth.session_id));
 
+    let html = HtmlBuf::default()
+        .node("main", |h| h
+            .hx_trigger("load")
+            .hx_get("api/render")
+            .hx_swap("outerHTML")
+        );
+
+    Ok((*auth, TypedHeader(htmx::response::ReplaceUrl(url)), html))
+}
+
+#[debug_handler(state=Arc<Mutex<ApiState>>)]
+async fn render(
+    user_session: UserSession<Authenticated>,
+) -> Result<impl IntoResponse> {
     let h = HtmlBuf::default();
-    match phase {
+    let html = match user_session.session.phase(user_session.auth).await? {
         Phase::NeedsOpponent => {
-            let h = h
+            h
                 .node("main", |h| h
                     .class("wait-lobby")
                     .hx_ext("sse")
                     .sse_connect("api/wait-lobby")
                     .hx_trigger("sse:message, every 10s, session-cleared from:body")
-                    .hx_post("api/connect")
+                    .hx_get("api/render")
                     .hx_swap("outerHTML")
                     .node("h1", |h| h
                         .text("Word search game")
@@ -127,12 +145,13 @@ async fn connect(
                         .text("Play singleplayer (coming soon)")
                     )
                 );
+        }
         Phase::Start => {
-            let h = h
+            h
                 .node("main", |h| h
                     .class("page")
                     .hx_trigger("start-game from:body")
-                    .hx_post("api/connect")
+                    .hx_get("api/render")
                     .hx_swap("outerHTML")
                     .node("p", |h| h
                         .text("Found your opponent!")
@@ -146,10 +165,10 @@ async fn connect(
         }
         Phase::Main { turn_remaining, board } => {
             let duration = turn_remaining.as_millis();
-            let h = h
+            h
                 .node("main", |h| h
-                    .hx_trigger(format!("load delay:{}ms(duration)")
-                    .hx_post("api/connect")
+                    .hx_trigger(format!("load delay:{}ms", duration))
+                    .hx_get("api/render")
                     .hx_swap("outerHTML")
                     .hx_on("htmx:load", "setupBoard(this)")
                     .node("section", |h| h
@@ -174,15 +193,15 @@ async fn connect(
                 );
         }
         Phase::Post { you_spelled, others_spelled } => {
-            let render_spelled = |spelled, html| {
+            let render_spelled = |spelled: &HashSet<String>, h| {
                 spelled.iter().fold(h, |h, word| {
                     render_word_score(word, h)
                 })
             };
-            let h = h
+            h
                 .node("main", |h| h
                     .hx_trigger("session-cleared from:body")
-                    .hx_post("api/connect")
+                    .hx_get("api/render")
                     .hx_swap("outerHTML")
                     .node("h1", |h| h
                         .text("Thank you for playing")
@@ -208,9 +227,9 @@ async fn connect(
                     )
                 );
         }
-    }
+    };
 
-    Ok((*auth, TypedHeader(hx::response::ReplaceUrl(url)), html))
+    Ok(html)
 }
 
 fn render_word_score(word: &str, html: HtmlBuf) -> HtmlBuf {
@@ -229,8 +248,6 @@ fn render_word_score(word: &str, html: HtmlBuf) -> HtmlBuf {
         )
 }
 
-type Update = ();
-
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn wait_lobby(mut user_session: UserSession<Authenticated>) -> Result<impl IntoResponse> {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -239,7 +256,7 @@ async fn wait_lobby(mut user_session: UserSession<Authenticated>) -> Result<impl
         .wait_lobby(user_session.auth, tx)
         .await?;
     let rx = UnboundedReceiverStream::new(rx)
-        .map(|data| format!("{}", data))
+        .map(|data| "dummy event")
         .map(|data| sse::Event::default().data(data).event("message"))
         .map(Ok::<_, Infallible>);
     Ok(Sse::new(rx).keep_alive(KeepAlive::default()))
@@ -248,23 +265,24 @@ async fn wait_lobby(mut user_session: UserSession<Authenticated>) -> Result<impl
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn start(mut user_session: UserSession<Authenticated>) -> Result<impl IntoResponse> {
     user_session.session.start(user_session.auth).await?;
-    let start_game = hx::response::Trigger(HeaderValue::from_static("start-game"));
-    Ok((start_game, StatusCode::OK))
+    let start_game = htmx::response::Trigger(HeaderValue::from_static("start-game"));
+    Ok((TypedHeader(start_game), StatusCode::OK))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn spell(
     mut user_session: UserSession<Authenticated>,
-    Form(word): Form<Vec<BoardPosition, String>>,
+    Form(word): Form<Vec<(BoardPosition, String)>>,
 ) -> Result<impl IntoResponse> {
     let mut word: Vec<(u32, BoardPosition)> = word
         .into_iter()
-        .filter_map(|(board_position, order)| Some((order.parse::<u32>().ok()?, board_position)));
-    word.sort_by_key(|(order, board_position)| order);
-    let word = word.into_iter().map(|(order, board_position)| board_position).collect::<Vec<_>>();
+        .filter_map(|(board_position, order)| Some((order.parse::<u32>().ok()?, board_position)))
+        .collect();
+    word.sort_by(|a, b| a.0.cmp(&b.0));
+    let word = word.into_iter().map(|(_, board_position)| board_position).collect::<Vec<_>>();
     let word = user_session
         .session
-        .spell(user_session.auth, word)
+        .spell(user_session.auth, &word)
         .await?;
     let html = HtmlBuf::default();
     let (status_code, html) = match word {
@@ -287,8 +305,8 @@ async fn spell(
             (StatusCode::NO_CONTENT, html)
         }
     };
-    let score_refresh = hx::response::Trigger(HeaderValue::from_static("score-refresh"));
-    Ok((score_refresh, status_code, html))
+    let score_refresh = htmx::response::Trigger(HeaderValue::from_static("score-refresh"));
+    Ok((status_code, TypedHeader(score_refresh), html))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
@@ -303,12 +321,12 @@ async fn score(
         .node("span", |h| h
             .text(format!("{}", score))
         );
-    Ok((html))
+    Ok(html)
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn clear(
-    mut user_session: UserSession<Authenticated>,
+    user_session: UserSession<Authenticated>,
 ) -> Result<impl IntoResponse> {
     let cookie = Cookie::build(("auth", ""))
         .secure(true)
@@ -316,9 +334,11 @@ async fn clear(
         .max_age(time::Duration::ZERO)
         .same_site(SameSite::Strict)
         .build();
-    let session_cleared = hx::response::Trigger(HeaderValue::from_static("session-cleared"));
-    Ok((session_cleared, cookie))
+    let cookie = CookieJar::new().add(cookie);
+    let session_cleared = htmx::response::Trigger(HeaderValue::from_static("session-cleared"));
+    Ok((TypedHeader(session_cleared), cookie))
 }
+
 struct ApiState {
     sessions: HashMap<SessionId, Arc<Mutex<Session>>>,
     expiry: VecDeque<SessionId>,
@@ -334,20 +354,20 @@ impl ApiState {
 
     async fn add_player_new_session(&mut self) -> Result<Authenticated> {
         if self.expiry.len() > 1000 {
-            let removed = self.expiry_queue.pop_front().unwrap();
+            let removed = self.expiry.pop_front().unwrap();
             self.sessions.remove(&removed);
         }
         let session_id = SessionId::generate(&mut thread_rng());
-        let session = Session::new(session_id);
+        let session = Arc::new(Mutex::new(Session::new(session_id)));
         self.sessions.insert(session_id, Arc::clone(&session));
         self.expiry.push_back(session_id);
-        let auth = session.lock().await.add_player(session_id).await?;
+        let auth = session.lock().await.add_player().await?;
         Ok(auth)
     }
 
     async fn add_player_existing_session(&mut self, session_id: SessionId) -> Result<Authenticated> {
         let session = self.get_session(session_id).await?;
-        let auth = session.lock().await.add_player(session_id).await?;
+        let auth = session.lock().await.add_player().await?;
         Ok(auth)
     }
 
@@ -364,7 +384,7 @@ fn score_word(word: &str) -> usize {
     points as usize
 }
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 enum Phase<'a> {
     NeedsOpponent,
     Start,
@@ -380,7 +400,7 @@ enum Phase<'a> {
 
 #[derive(Debug)]
 struct Player {
-    tx: Option<UnboundedSender<Update>>,
+    tx: Option<UnboundedSender<()>>,
     spelled: HashSet<String>,
     turn_expires: Option<Instant>,
 }
@@ -393,30 +413,30 @@ struct Session {
 }
 
 impl Session {
-    pub fn new(session_id: SessionId) -> Self
+    pub fn new(session_id: SessionId) -> Self {
         Self {
             players: HashMap::default(),
-            phase: Phase::Lobby,
+            board: Board::generate(&mut thread_rng(), 4, 4),
             session_id,
         }
     }
 
-    pub async fn phase(auth: Authenticated) -> Result<Phase<'_>> {
+    pub async fn phase(&self, auth: Authenticated) -> Result<Phase<'_>> {
         if self.players.len() < 2 {
             return Ok(Phase::NeedsOpponent);
         }
         let Some(turn_expires) = self.players[&auth.user_secret].turn_expires else {
             return Ok(Phase::Start);
         };
-        let turn_remaining = turn_expires.checked_duration_since(Instant::now()) else {
+        let Some(turn_remaining) = turn_expires.checked_duration_since(Instant::now()) else {
             let you_spelled = &self.players[&auth.user_secret].spelled;
             let others_spelled = self.players.iter()
-                .filter(|(k, v)| k != auth.user_secret)
-                .map(|(k, v)| &v.spelled)
+                .filter(|&(&k, _)| k != auth.user_secret)
+                .map(|(_, v)| &v.spelled)
                 .collect::<Vec<_>>();
             return Ok(Phase::Post { you_spelled, others_spelled });
         };
-        Ok(Phase::Main { turn_remaining, board: &self.board, })
+        Ok(Phase::Main { turn_remaining, board: &self.board })
     }
 
     pub async fn add_player(&mut self) -> Result<Authenticated> {
@@ -424,11 +444,11 @@ impl Session {
             return Err(Error::TooManyPlayers);
         }
         for player in self.players.values() {
-            let Some(tx) = player.tx.as_ref() else { continue }
-            tx.send(Update);
+            let Some(tx) = player.tx.as_ref() else { continue };
+            let _ = tx.send(());
         }
         let user_secret = UserSecret::generate(&mut thread_rng());
-        self.players[seat] = Some(Player {
+        self.players.insert(user_secret, Player {
             tx: None,
             spelled: HashSet::default(),
             turn_expires: None,
@@ -436,7 +456,7 @@ impl Session {
         Ok(Authenticated {
             auth: Unauthenticated {
                 user_secret,
-                session_id,
+                session_id: self.session_id,
             },
         })
     }
@@ -445,11 +465,11 @@ impl Session {
         if self.players.len() < 2 {
             return Err(Error::NotEnoughPlayers);
         }
-        if self.turn_expires.is_some() {
+        let turn_expires = &mut self.players.get_mut(&auth.user_secret).unwrap().turn_expires;
+        if turn_expires.is_some() {
             return Err(Error::AlreadyStarted);
         }
-        let turn_expires = Instant::now() + Duration::from_secs(60);
-        self.players[&auth.user_secret].turn_expires = Some(turn_expires);
+        *turn_expires = Some(Instant::now() + Duration::from_secs(60));
         Ok(())
     }
 
@@ -459,11 +479,11 @@ impl Session {
             return Err(Error::NotStarted);
         }
         let word = self.board.spell(word)?;
-        let already_present = self.players[&auth.user_secret].spelled.insert(word.clone()).is_some();
-        if already_present {
-            Ok(None)
-        } else {
+        let newly_spelled = self.players.get_mut(&auth.user_secret).unwrap().spelled.insert(word.clone());
+        if newly_spelled {
             Ok(Some(word))
+        } else {
+            Ok(None)
         }
     }
 
@@ -474,27 +494,26 @@ impl Session {
     pub async fn wait_lobby(
         &mut self,
         auth: Authenticated,
-        tx: UnboundedSender<Update>,
+        tx: UnboundedSender<()>,
     ) -> Result<()> {
-        self.players[auth.user_secret].as_mut().ok_or(Error::Absent)?.tx = Some(tx);
+        self.players.get_mut(&auth.user_secret).unwrap().tx = Some(tx);
         Ok(())
     }
 
     pub fn authenticate(&mut self, auth: Unauthenticated) -> Result<Authenticated> {
-        let human = self.players[auth.seat].as_ref().ok_or(Error::Absent)?;
-        if human.user_secret != auth.user_secret {
-            return Err(Error::BadAuthentication);
+        if !self.players.contains_key(&auth.user_secret) {
+            return Err(Error::Absent);
         }
         Ok(Authenticated { auth })
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 struct BoardPosition(usize);
 
 impl BoardPosition {
     fn row_col(&self, columns: usize) -> (usize, usize) {
-        (self / columns, self % colunms)
+        (self.0 / columns, self.0 % columns)
     }
 
     fn adjacent(&self, other: &BoardPosition, columns: usize) -> bool {
@@ -504,24 +523,24 @@ impl BoardPosition {
     }
 }
 
+#[derive(Clone, Debug)]
 struct Board {
-    rows: usize,
     cols: usize,
     tiles: Vec<char>,
 }
 
 impl Board {
-    fn generate<R: Rng>(mut rng: &mut R, rows: usize, cols: usize) -> Self {
+    fn generate<R: Rng>(mut rng: R, rows: usize, cols: usize) -> Self {
         // https://en.wikipedia.org/wiki/Letter_frequency
         let weights = [8.2,1.5,2.8,4.3,12.7,2.2,2.0,6.1,7.0,0.15,0.77,4.0,2.4,6.7,7.5,1.9,0.095,6.0,6.3,9.1,2.8,0.98,2.4,0.15,2.0,0.074];
-        let dist = WeightedIndex::new(&weights);
-        iter::repeat_with(|| dist.sample(&mut rng))
+        let dist = WeightedIndex::new(&weights).unwrap();
+        let tiles = iter::repeat_with(|| dist.sample(&mut rng))
             .map(|i| u32::try_from(i).unwrap())
             .map(|i| i + u32::from('A'))
-            .map(|i| char::try_from(i))
+            .map(|i| char::try_from(i).unwrap())
             .take(rows * cols)
-            .collect::<Vec<_>>();lines
-        Self { rows, cols, tiles }
+            .collect::<Vec<_>>();
+        Self { cols, tiles }
     }
 
     fn spell(&self, positions: &[BoardPosition]) -> Result<String> {
@@ -530,11 +549,11 @@ impl Board {
                 .expect("should find dictionary file");
             dictionary.lines().map(ToString::to_string).collect()
         });
-        let mut seen = HashSet::default();
-        for pair in positions.iter().windows(2) {
+        let mut seen: HashSet<BoardPosition> = HashSet::default();
+        for pair in positions.windows(2) {
             let &[a, b]: &[BoardPosition; 2] = pair.try_into().unwrap();
             let never_seen = seen.insert(a);
-            if !never_seen || !a.adjacent(b) {
+            if !never_seen || !a.adjacent(&b, self.cols) {
                 return Err(Error::BadSpelling);
             }
         }
@@ -542,7 +561,7 @@ impl Board {
             .iter()
             .map(|&position| self.tiles.get(position.0).ok_or(Error::BadSpelling))
             .collect::<Result<String, _>>()?;
-        if !DICTIONARY.contains(word) {
+        if !DICTIONARY.contains(&word) {
             return Err(Error::BadSpelling);
         }
         Ok(word)
@@ -556,17 +575,17 @@ impl Board {
                     .hx_trigger("spell")
                     .hx_put("api/spell")
                     .hx_target("previous .spelled")
-                    .hx_swap("afterbegin")
+                    .hx_swap("afterbegin");
                 self.tiles.iter().enumerate().fold(h, |h, (i, letter)| h
                     .node("label", |h| h
                         .node("input", |h| h
                             .r#type("hidden")
                             .name(format!("{}", i))
                         )
-                        .text(letter)
+                        .text(format!("{}", letter))
                     )
                 )
-            )
+            })
     }
 }
 
@@ -679,7 +698,7 @@ where
 struct SessionId(Uuid);
 
 impl SessionId {
-    fn generate<R: Rng>(rng: R) -> Self {
+    fn generate<R: Rng>(mut rng: R) -> Self {
         let ret = rng.gen();
         let ret = uuid::Builder::from_random_bytes(ret).into_uuid();
         Self(ret)
@@ -703,7 +722,7 @@ impl FromStr for SessionId {
 struct UserSecret(Uuid);
 
 impl UserSecret {
-    fn generate<R: Rng>(rng: R) -> Self {
+    fn generate<R: Rng>(mut rng: R) -> Self {
         let ret = rng.gen();
         let ret = uuid::Builder::from_random_bytes(ret).into_uuid();
         Self(ret)
@@ -724,7 +743,8 @@ enum Error {
     BadSpelling,
     AlreadyStarted,
     NotStarted,
-    NotEnoughPlayers
+    NotEnoughPlayers,
+    TooManyPlayers,
 }
 
 impl fmt::Display for Error {

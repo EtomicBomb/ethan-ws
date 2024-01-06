@@ -20,6 +20,7 @@ use {
 mod htmx;
 mod records;
 mod pusoy;
+mod word;
 
 #[tokio::main]
 async fn main() {

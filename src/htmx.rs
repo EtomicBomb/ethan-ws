@@ -261,6 +261,7 @@ pub mod request {
     use http::header::{HeaderName, HeaderValue};
     use headers::{Header};
     use url::Url;
+    use axum::response::{IntoResponseParts, ResponseParts};
 
     presence_header!(Boosted "hx-boosted");
     uri_header!(CurrentUrl "hx-current-url");
@@ -276,6 +277,7 @@ pub mod response {
     pub use http::header::{HeaderName, HeaderValue};
     pub use headers::{Header};
     use url::Url;
+    use axum::response::{IntoResponseParts, ResponseParts};
     
     uri_header!(Location "hx-location");
     uri_header!(PushUrl "hx-push-url");

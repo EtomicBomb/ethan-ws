@@ -19,20 +19,17 @@ use {
         extract::CookieJar,
     },
     cookie::{Cookie, Expiration, SameSite},
-    futures::future::BoxFuture,
     http::{request::Parts, status::StatusCode, HeaderValue},
     once_cell::{sync::Lazy},
-    rand::{seq::SliceRandom, thread_rng, Rng, distributions::{Distribution, weighted::WeightedIndex}},
+    rand::{thread_rng, Rng, distributions::{Distribution, weighted::WeightedIndex}},
     serde::{Deserialize, Serialize},
-    serde_with::{serde_as, DurationMilliSeconds},
     std::{
         collections::{HashSet, HashMap, VecDeque},
         convert::Infallible,
         fmt::{self},
-        ops::{ControlFlow, Deref},
+        ops::{Deref},
         str::FromStr,
         sync::Arc,
-        sync::Weak,
         time::Duration,
         iter,
         cmp,
@@ -41,16 +38,11 @@ use {
     tokio::{
         sync::mpsc::{self, UnboundedSender},
         sync::{Mutex, OwnedMutexGuard},
-        task,
-        time::{sleep_until, Instant},
+        time::{Instant},
     },
     tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt},
-    time::{OffsetDateTime},
     uuid::Uuid,
 };
-
-const BOT_ACTION_TIMER: Duration = Duration::from_secs(1);
-const INACTIVE_BEFORE_DISCONNECT: Duration = Duration::from_secs(60);
 
 #[allow(dead_code)]
 pub fn api<S>() -> Router<S> {
@@ -256,7 +248,7 @@ async fn wait_lobby(mut user_session: UserSession<Authenticated>) -> Result<impl
         .wait_lobby(user_session.auth, tx)
         .await?;
     let rx = UnboundedReceiverStream::new(rx)
-        .map(|data| "dummy event")
+        .map(|_data| "dummy event")
         .map(|data| sse::Event::default().data(data).event("message"))
         .map(Ok::<_, Infallible>);
     Ok(Sse::new(rx).keep_alive(KeepAlive::default()))
@@ -326,7 +318,7 @@ async fn score(
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn clear(
-    user_session: UserSession<Authenticated>,
+    _user_session: UserSession<Authenticated>,
 ) -> Result<impl IntoResponse> {
     let cookie = Cookie::build(("auth", ""))
         .secure(true)
@@ -733,13 +725,8 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug)]
 enum Error {
-    BadAuthentication,
     NoSession,
     Absent,
-    BadPhase,
-    NotHost,
-    Full,
-    NotCurrent,
     BadSpelling,
     AlreadyStarted,
     NotStarted,
@@ -750,13 +737,8 @@ enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BadAuthentication => write!(f, "authentication not valid for the player"),
             Self::NoSession => write!(f, "request session not found"),
             Self::Absent => write!(f, "player must be present in the game"),
-            Self::BadPhase => write!(f, "request must be applicable to current phase"),
-            Self::NotHost => write!(f, "requests must have from host&"),
-            Self::Full => write!(f, "can only connect sessions that aren't full"),
-            Self::NotCurrent => write!(f, "this request should be made by the current player"),
             Self::BadSpelling => write!(f, "bad spelling"),
             Self::AlreadyStarted => write!(f, "already started"),
             Self::NotStarted => write!(f, "not started"),
@@ -769,13 +751,8 @@ impl fmt::Display for Error {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let status = match self {
-            Self::BadAuthentication => StatusCode::UNAUTHORIZED,
             Self::NoSession => StatusCode::BAD_REQUEST,
             Self::Absent => StatusCode::BAD_REQUEST,
-            Self::BadPhase => StatusCode::BAD_REQUEST,
-            Self::NotHost => StatusCode::FORBIDDEN,
-            Self::Full => StatusCode::BAD_REQUEST,
-            Self::NotCurrent => StatusCode::BAD_REQUEST,
             Self::BadSpelling => StatusCode::BAD_REQUEST,
             Self::AlreadyStarted => StatusCode::BAD_REQUEST,
             Self::NotStarted => StatusCode::BAD_REQUEST,

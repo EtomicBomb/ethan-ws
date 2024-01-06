@@ -17,8 +17,9 @@ use {
     },
 };
 
-mod pusoy;
+mod htmx;
 mod records;
+mod pusoy;
 
 #[tokio::main]
 async fn main() {

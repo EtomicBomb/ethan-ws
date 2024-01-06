@@ -1,7 +1,6 @@
 use {
     std::io::Write as _,
     axum::response::{Html, IntoResponse, Response},
-    html_escape::{encode_double_quoted_attribute_to_writer, encode_safe_to_writer},
 };
 
 macro_rules! attributes {
@@ -114,20 +113,23 @@ impl HtmlBuf {
         sse_connect "sse-connect",
     }
 
+    #[inline]
     pub fn text<S: AsRef<str>>(mut self, text: S) -> Self {
         self.close_start_tag();
-        encode_safe_to_writer(text.as_ref(), &mut self.buf).unwrap();
+        html_escape::encode_safe_to_writer(text.as_ref(), &mut self.buf).unwrap();
         self
     }
 
+    #[inline]
     fn raw_attribute<S: AsRef<str>>(mut self, attribute: &str, extension: &str, value: S) -> Self {
         assert!(self.start_tag_unclosed, "no node to add the attribute to");
         write!(self.buf, " {}{}=\"", attribute, extension).unwrap();
-        encode_double_quoted_attribute_to_writer(value.as_ref(), &mut self.buf).unwrap();
+        html_escape::encode_double_quoted_attribute_to_writer(value.as_ref(), &mut self.buf).unwrap();
         write!(self.buf, "\"").unwrap();
         self
     }
 
+    #[inline]
     fn close_start_tag(&mut self) {
         if self.start_tag_unclosed {
             write!(self.buf, ">").unwrap();
@@ -261,7 +263,6 @@ pub mod request {
     use http::header::{HeaderName, HeaderValue};
     use headers::{Header};
     use url::Url;
-    
 
     presence_header!(Boosted "hx-boosted");
     uri_header!(CurrentUrl "hx-current-url");
@@ -277,7 +278,6 @@ pub mod response {
     pub use http::header::{HeaderName, HeaderValue};
     pub use headers::{Header};
     use url::Url;
-    
     
     uri_header!(Location "hx-location");
     uri_header!(PushUrl "hx-push-url");

@@ -44,7 +44,6 @@ use {
     uuid::Uuid,
 };
 
-#[allow(dead_code)]
 pub fn api<S>() -> Router<S> {
     Router::new()
         .route("/connect", post(connect))
@@ -600,7 +599,7 @@ impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<Authenticated> {
         let auth = session
             .authenticate(auth)
             .map_err(|err| err.into_response())?;
-        Ok(UserSession { session, auth })
+        Ok(Self { session, auth })
     }
 }
 
@@ -623,7 +622,7 @@ impl FromRequestParts<Arc<Mutex<ApiState>>> for UserSession<Unauthenticated> {
             .map_err(|err| err.into_response())?
             .lock_owned()
             .await;
-        Ok(UserSession { session, auth })
+        Ok(Self { session, auth })
     }
 }
 

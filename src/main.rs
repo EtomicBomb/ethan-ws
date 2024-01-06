@@ -30,6 +30,7 @@ async fn main() {
 async fn serve(on_port: u16) {
     let serve_api = Router::new()
         .nest("/pusoy/api", pusoy::api())
+        .nest("/word/api", word::api())
         .nest(
             "/applab/chess/records",
             records::api(["games", "broadcasts", "newtable"]),

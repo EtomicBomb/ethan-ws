@@ -1,6 +1,6 @@
 use {
     std::io::Write as _,
-    axum::response::{Html, IntoResponse, Response},
+    axum::{body::Body},
 };
 
 macro_rules! attributes {
@@ -138,9 +138,9 @@ impl HtmlBuf {
     }
 }
 
-impl IntoResponse for HtmlBuf {
-    fn into_response(self) -> Response {
-        Html(self.buf).into_response()
+impl From<HtmlBuf> for Body {
+    fn from(html: HtmlBuf) -> Self {
+        Body::from(html.buf)
     }
 }
 

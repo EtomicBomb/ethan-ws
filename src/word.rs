@@ -9,7 +9,7 @@ use {
         response::{
             sse::{self, KeepAlive, Sse},
             IntoResponse, Response, 
-            IntoResponseParts, ResponseParts
+            IntoResponseParts, ResponseParts, Html,
         },
         routing::{get, post, put},
         Form, RequestPartsExt, Router, 
@@ -101,7 +101,7 @@ async fn connect(
             .hx_swap("outerHTML")
         );
 
-    Ok((*auth, TypedHeader(htmx::response::ReplaceUrl(url)), html))
+    Ok((*auth, TypedHeader(htmx::response::ReplaceUrl(url)), Html(html)))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
@@ -297,7 +297,7 @@ async fn spell(
         }
     };
     let score_refresh = htmx::response::Trigger(HeaderValue::from_static("score-refresh"));
-    Ok((status_code, TypedHeader(score_refresh), html))
+    Ok((status_code, TypedHeader(score_refresh), Html(html)))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
@@ -312,7 +312,7 @@ async fn score(
         .node("span", |h| h
             .text(format!("{}", score))
         );
-    Ok(html)
+    Ok(Html(html))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]

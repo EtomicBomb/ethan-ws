@@ -8,7 +8,8 @@ use {
         response::{
             sse::{self, KeepAlive, Sse},
             IntoResponse, Response, 
-            IntoResponseParts, ResponseParts
+            IntoResponseParts, ResponseParts,
+                Html,
         },
         routing::{get, post, put},
         Form, RequestPartsExt, Router, 
@@ -117,7 +118,7 @@ async fn connect(
                 )
             )
         );
-    Ok((*auth, TypedHeader(htmx::response::ReplaceUrl(url)), html))
+    Ok((*auth, TypedHeader(htmx::response::ReplaceUrl(url)), Html(html)))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
@@ -142,7 +143,7 @@ async fn subscribe(mut user_session: UserSession<Authenticated>) -> Result<impl 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
 async fn state(mut user_session: UserSession<Authenticated>) -> Result<impl IntoResponse> {
     let view = user_session.session.view(user_session.auth).await;
-    Ok(view)
+    Ok(Html(view))
 }
 
 #[serde_as]
@@ -182,7 +183,7 @@ async fn playable(
         .await;
     let label = if cards.is_empty() { "pass" } else { "play" };
     let off_turn = matches!(playable, Err(Error::NotCurrent));
-    Ok(match playable.as_ref() {
+    Ok(Html(match playable.as_ref() {
         Ok(_play) => HtmlBuf::default()
             .node("button", |h| h
                 .r#type("submit")
@@ -200,7 +201,7 @@ async fn playable(
                 .class(if off_turn { "playable-off-turn" } else { "playable-error" })
                 .text(label)
             ),
-    })
+    }))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]

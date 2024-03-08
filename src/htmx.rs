@@ -1,20 +1,11 @@
 use {
     std::io::Write as _,
+    std::fmt,
     axum::{body::Body},
 };
 
-macro_rules! attributes {
-    ($($name:ident $attribute_name:literal,)*) => {
-        $(
-        #[allow(dead_code)]
-        pub fn $name<S: AsRef<str>>(self, value: S) -> Self {
-            self.attribute($attribute_name, value)
-        }
-        )*
-    };
-}
-
 #[derive(Clone, Default, Debug)]
+#[must_use]
 pub struct HtmlBuf {
     buf: Vec<u8>,
     start_tag_unclosed: bool,
@@ -58,59 +49,8 @@ impl HtmlBuf {
         }
     }
 
-    pub fn attribute<S: AsRef<str>>(self, attribute: &'static str, value: S) -> Self {
-        self.raw_attribute(attribute, "", value)
-    }
-
-    pub fn hx_on<S: AsRef<str>>(self, event: &'static str, value: S) -> Self {
-        self.raw_attribute("hx-on:", event, value)
-    }
-
-    attributes! {
-        class "class",
-        id "id",
-        r#type "type",
-        name "name",
-        style "style",
-
-        hx_boost "hx-boost",
-        hx_get "hx-get",
-        hx_post "hx-post",
-//        hx_on "hx-on", // always concatenated with other stuff
-        hx_push_url "hx-push_url",
-        hx_select "hx-select",
-        hx_select_oob "hx-select-oob",
-        hx_swap "hx-swap",
-        hx_swap_oob "hx-swap-oob",
-        hx_target "hx-target",
-        hx_trigger "hx-trigger",
-        hx_vals "hx-vals",
-        hx_confirm "hx-confirm",
-        hx_delete "hx-delete",
-        hx_disable "hx-disable",
-        hx_disabled_elt "hx-disabled_elt",
-        hx_disinherit "hx-disinherit",
-        hx_encoding "hx-encoding",
-        hx_ext "hx-ext",
-        hx_headers "hx-headers",
-        hx_history "hx-history",
-        hx_history_elt "hx-history-elt",
-        hx_include "hx-include",
-        hx_indicator "hx-indicator",
-        hx_params "hx-params",
-        hx_patch "hx-patch",
-        hx_preserve "hx-preserve",
-        hx_prompt "hx-prompt",
-        hx_put "hx-put",
-        hx_replace_url "hx-replace-url",
-        hx_request "hx-request",
-        hx_sse "hx-sse",
-        hx_sync "hx-sync",
-        hx_validate "hx-validate",
-        hx_vars "hx-vars",
-        hx_ws "hx-ws",
-
-        sse_connect "sse-connect",
+    pub fn a<S: AsRef<str>>(self, attribute: Attribute, value: S) -> Self {
+        self.raw_attribute(attribute.into(), "", value)
     }
 
     #[inline]
@@ -136,6 +76,210 @@ impl HtmlBuf {
             self.start_tag_unclosed = false;
         }
     }
+
+    pub fn hx_on<S: AsRef<str>>(self, event: &'static str, value: S) -> Self {
+        self.raw_attribute("hx-on:", event, value)
+    }
+
+}
+
+macro_rules! make_enum {
+    ($enum_name:ident; $($name:ident $attribute_name:literal,)*) => {
+        #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub enum $enum_name {
+            $($name,)*
+        }
+
+        impl From<$enum_name> for &'static str {
+            fn from(x: $enum_name) -> &'static str {
+                match x {
+                    $(Attribute::$name => $attribute_name,)*
+                }
+
+            }
+        }
+
+        impl fmt::Display for $enum_name {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str((*self).into())
+            }
+        }
+    };
+}
+
+
+    // curl https://raw.githubusercontent.com/jozo/all-html-elements-and-attributes/master/html-elements-attributes.json | jq -r '.[] | .[]' | grep -v data | sort | uniq | awk '{a=$0; gsub("-", "_", a); print a, "\""  $0 "\""}'
+    // https://htmx.org/reference/#attributes
+make_enum! {
+    Attribute;
+    HxBoost "hx-boost",
+    HxGet "hx-get",
+    HxPost "hx-post",
+    HxPushUrl "hx-push-url",
+    HxSelect "hx-select",
+    HxSelectOob "hx-select-oob",
+    HxSwap "hx-swap",
+    HxSwapOob "hx-swap-oob",
+    HxTarget "hx-target",
+    HxTrigger "hx-trigger",
+    HxVals "hx-vals",
+    HxConfirm "hx-confirm",
+    HxDelete "hx-delete",
+    HxDisable "hx-disable",
+    HxDisabledElt "hx-disabled-elt",
+    HxDisinherit "hx-disinherit",
+    HxEncoding "hx-encoding",
+    HxExt "hx-ext",
+    HxHeaders "hx-headers",
+    HxHistory "hx-history",
+    HxHistoryElt "hx-history-elt",
+    HxInclude "hx-include",
+    HxIndicator "hx-indicator",
+    HxParams "hx-params",
+    HxPatch "hx-patch",
+    HxPreserve "hx-preserve",
+    HxPrompt "hx-prompt",
+    HxPut "hx-put",
+    HxReplaceUrl "hx-replace-url",
+    HxRequest "hx-request",
+    HxSse "hx-sse",
+    HxSync "hx-sync",
+    HxValidate "hx-validate",
+    HxVars "hx-vars",
+    HxWs "hx-ws",
+
+    SseConnect "sse-connect",
+
+    Accept "accept",
+    AcceptCharset "accept-charset",
+    Accesskey "accesskey",
+    Action "action",
+    Align "align",
+    Allow "allow",
+    Alt "alt",
+    Async "async",
+    Autocapitalize "autocapitalize",
+    Autocomplete "autocomplete",
+    Autofocus "autofocus",
+    Autoplay "autoplay",
+    Background "background",
+    Bgcolor "bgcolor",
+    Border "border",
+    Buffered "buffered",
+    Capture "capture",
+    Challenge "challenge",
+    Charset "charset",
+    Checked "checked",
+    Cite "cite",
+    Class "class",
+    Code "code",
+    Codebase "codebase",
+    Color "color",
+    Cols "cols",
+    Colspan "colspan",
+    Content "content",
+    Contenteditable "contenteditable",
+    Contextmenu "contextmenu",
+    Controls "controls",
+    Coords "coords",
+    Crossorigin "crossorigin",
+    Csp "csp",
+    Datetime "datetime",
+    Decoding "decoding",
+    Default "default",
+    Defer "defer",
+    Dir "dir",
+    Dirname "dirname",
+    Disabled "disabled",
+    Download "download",
+    Draggable "draggable",
+    Enctype "enctype",
+    Enterkeyhint "enterkeyhint",
+    For "for",
+    Form "form",
+    Formaction "formaction",
+    Formenctype "formenctype",
+    Formmethod "formmethod",
+    Formnovalidate "formnovalidate",
+    Formtarget "formtarget",
+    Headers "headers",
+    Height "height",
+    Hidden "hidden",
+    High "high",
+    Href "href",
+    Hreflang "hreflang",
+    HttpEquiv "http-equiv",
+    Icon "icon",
+    Id "id",
+    Importance "importance",
+    Inputmode "inputmode",
+    Integrity "integrity",
+    Intrinsicsize "intrinsicsize",
+    Ismap "ismap",
+    Itemprop "itemprop",
+    Keytype "keytype",
+    Kind "kind",
+    Label "label",
+    Lang "lang",
+    Language "language",
+    List "list",
+    Loading "loading",
+    Loop "loop",
+    Low "low",
+    Manifest "manifest",
+    Max "max",
+    Maxlength "maxlength",
+    Media "media",
+    Method "method",
+    Min "min",
+    Minlength "minlength",
+    Multiple "multiple",
+    Muted "muted",
+    Name "name",
+    Novalidate "novalidate",
+    Open "open",
+    Optimum "optimum",
+    Pattern "pattern",
+    Ping "ping",
+    Placeholder "placeholder",
+    Poster "poster",
+    Preload "preload",
+    Radiogroup "radiogroup",
+    Readonly "readonly",
+    Referrerpolicy "referrerpolicy",
+    Rel "rel",
+    Required "required",
+    Reversed "reversed",
+    Role "role",
+    Rows "rows",
+    Rowspan "rowspan",
+    Sandbox "sandbox",
+    Scope "scope",
+    Scoped "scoped",
+    Selected "selected",
+    Shape "shape",
+    Size "size",
+    Sizes "sizes",
+    Slot "slot",
+    Span "span",
+    Spellcheck "spellcheck",
+    Src "src",
+    Srcdoc "srcdoc",
+    Srclang "srclang",
+    Srcset "srcset",
+    Start "start",
+    Step "step",
+    Style "style",
+    Summary "summary",
+    Tabindex "tabindex",
+    Target "target",
+    Title "title",
+    Translate "translate",
+    Type "type",
+    Usemap "usemap",
+    Value "value",
+    Width "width",
+    Wrap "wrap",
 }
 
 impl From<HtmlBuf> for Body {

@@ -1,6 +1,6 @@
 use {
     super::{choose_play, Card, Cards, GameState, Play, PlayError, Relative, Seat, SeatMap},
-    crate::htmx::{self, HtmlBuf},
+    crate::htmx::{self, HtmlBuf, Attribute::*},
     async_trait::async_trait,
     axum::{
         debug_handler,
@@ -100,17 +100,17 @@ async fn connect(
 
     let html = HtmlBuf::default()
         .node("div", |h| h
-            .hx_trigger("every 30s")
-            .hx_post("api/keep-alive")
+            .a(HxTrigger, "every 30s")
+            .a(HxPost, "api/keep-alive")
         )
         .node("div", |h| h
-            .hx_ext("sse")
-            .hx_ext("morph")
-            .sse_connect("api/subscribe")
+            .a(HxExt, "sse")
+            .a(HxExt, "morph")
+            .a(SseConnect, "api/subscribe")
             .node("main", |h| h
-                .hx_trigger("load, sse:message")
-                .hx_get("api/state")
-                .hx_swap("morph:innerHTML")
+                .a(HxTrigger, "load, sse:message")
+                .a(HxGet, "api/state")
+                .a(HxSwap, "morph:innerHTML")
             )
             .node("div", |h| h
                 .chain_if_some(reconnect_reason, |h, reconnect_reason| h
@@ -186,19 +186,19 @@ async fn playable(
     Ok(Html(match playable.as_ref() {
         Ok(_play) => HtmlBuf::default()
             .node("button", |h| h
-                .r#type("submit")
-                .id("play-button")
-                .hx_post("api/play")
-                .hx_include("#cards-to-play")
+                .a(Type, "submit")
+                .a(Id, "play-button")
+                .a(HxPost, "api/play")
+                .a(HxInclude, "#cards-to-play")
                 .text(label)
             ),
         Err(error) => HtmlBuf::default()
             .node("button", |h| h
-                .r#type("submit")
-                .attribute("id", "play-button")
-                .attribute("disabled", "")
-                .attribute("title", format!("{}", error))
-                .class(if off_turn { "playable-off-turn" } else { "playable-error" })
+                .a(Type, "submit")
+                .a(Id, "play-button")
+                .a(Disabled, "")
+                .a(Title, format!("{}", error))
+                .a(Class, if off_turn { "playable-off-turn" } else { "playable-error" })
                 .text(label)
             ),
     }))
@@ -425,17 +425,17 @@ impl Session {
             let seat = auth.seat.relative(relative);
             html
                 .node("div", |h| {
-                    let h = h.class(format!("cards player {}", relative));
+                    let h = h.a(Class, format!("cards player {}", relative));
                     let cards = matches!(phase, Phase::Active | Phase::Post)
                         .then(|| game_state.hand(seat).into_iter().map(|card| card_id_cypher[&card].clone()).collect::<Vec<_>>())
                         .unwrap_or_default();
                     cards.into_iter().fold(h, |h, card| h
                         .node("label", |h| h
-                            .class("card")
-                            .id(format!("card_id_cypher-{}", card))
+                            .a(Class, "card")
+                            .a(Id, format!("card_id_cypher-{}", card))
                             .node("img", |h| h
-                                .attribute("src", "cards/back.svg")
-                                .attribute("alt", "hidden card")
+                                .a(Src, "cards/back.svg")
+                                .a(Alt, "hidden card")
                             )
                         )
                     )
@@ -453,7 +453,7 @@ impl Session {
             let play_button = matches!(phase, Phase::Active) && relative == Relative::My;
             html
                 .node("section", |h| h
-                    .class(format!("info {}", relative))
+                    .a(Class, format!("info {}", relative))
                     .node("h2", |h| h
                         .text(format!("{}", seat))
                     )
@@ -463,8 +463,8 @@ impl Session {
                     .node("div", |h| h
                         .chain_if(!is_human, |h| h
                             .node("img", |h| h
-                                .attribute("src", "bot.svg")
-                                .attribute("alt", "player is bot")
+                                .a(Src, "bot.svg")
+                                .a(Alt, "player is bot")
                             )
                         )
                     )
@@ -473,67 +473,67 @@ impl Session {
                     .node("div", |h| h
                         .chain_if(turn, |h| h
                             .node("img", |h| h
-                                .attribute("src", "turn.svg")
-                                .attribute("alt", "player's turn")
+                                .a(Src, "turn.svg")
+                                .a(Alt, "player's turn")
                             )
                         )
                     )
                     .node("div", |h| h
                         .chain_if(winning, |h| h
                             .node("img", |h| h
-                                .attribute("src", "win.svg")
-                                .attribute("alt", "player won")
+                                .a(Src, "win.svg")
+                                .a(Alt, "player won")
                             )
                         )
                         .chain_if(!winning && control, |h| h
                             .node("img", |h| h
-                                .attribute("src", "control.svg")
-                                .attribute("alt", "player has control")
+                                .a(Src, "control.svg")
+                                .a(Alt, "player has control")
                             )
                         )
                         .chain_if(!winning && !control && played, |h| h
                             .node("img", |h| h
-                                .attribute("src", "played.svg")
-                                .attribute("alt", "player played")
+                                .a(Src, "played.svg")
+                                .a(Alt, "player played")
                             )
                         )
                     )
                     .node("div", |h| h
                         .chain_if(host_controls, |h| h
                             .node("form", |h| h
-                                .id("timer-controls")
-                                .hx_put("api/timer")
-                                .hx_trigger("load, input")
-                                .hx_swap("none")
+                                .a(Id, "timer-controls")
+                                .a(HxPut, "api/timer")
+                                .a(HxTrigger, "load, input")
+                                .a(HxSwap, "none")
                                 .node("label", |h| h
                                     .text("enable action timer")
                                     .node("input", |h| h
-                                        .r#type("checkbox")
-                                        .name("enable-timer")
+                                        .a(Type, "checkbox")
+                                        .a(Name, "enable-timer")
                                     )
                                 )
                                 .node("label", |h| h
                                     .text("timer value")
                                     .node("input", |h| h
-                                        .r#type("range")
-                                        .attribute("min", "5000")
-                                        .attribute("value", "5000")
-                                        .attribute("max", "200000")
-                                        .name("timer-value")
+                                        .a(Type, "range")
+                                        .a(Min, "5000")
+                                        .a(Value, "5000")
+                                        .a(Max, "200000")
+                                        .a(Name, "timer-value")
                                     )
                                 )
                             )
                             .node("button", |h| h
-                                .hx_post("api/start")
+                                .a(HxPost, "api/start")
                                 .text("start the game")
                             )
                         )
                         .chain_if(play_button, |h| h
                             .node("button", |h| h
-                                .id("play-button")
-                                .hx_trigger("load")
-                                .hx_post("api/playable")
-                                .hx_swap("outerHTML")
+                                .a(Id, "play-button")
+                                .a(HxTrigger, "load")
+                                .a(HxPost, "api/playable")
+                                .a(HxSwap, "outerHTML")
                                 .text("play")
                             )
                         )
@@ -543,19 +543,19 @@ impl Session {
 
         HtmlBuf::default()
             .node("div", |h| h
-                .class("scene-wrap")
+                .a(Class, "scene-wrap")
                 .node("div", |h| h
-                    .class("scene")
+                    .a(Class, "scene")
                     .node("section", |h| h
-                        .class("table")
+                        .a(Class, "table")
                         .node("div", |h| {
-                            let h = h.class("cards");
+                            let h = h.a(Class, "cards");
                             table_cards.into_iter().fold(h, |h, card| h
                                 .node("div", |h| h
-                                    .class("card")
+                                    .a(Class, "card")
                                     .node("img", |h| h
-                                        .attribute("src", format!("cards/{}.svg", card))
-                                        .attribute("alt", format!("{}", card))
+                                        .a(Src, format!("cards/{}.svg", card))
+                                        .a(Alt, format!("{}", card))
                                     )
                                 )
                             )
@@ -571,27 +571,27 @@ impl Session {
                 .chain(|h| template_info(h, Relative::Right))
                 .node("div", |h| {
                     let h = h
-                        .id("cards-to-play")
-                        .class("cards player my");
+                        .a(Id, "cards-to-play")
+                        .a(Class, "cards player my");
                     let my_cards = matches!(self.phase, Phase::Active | Phase::Post)
                         .then_some(self.game_state.hand(auth.seat))
                         .unwrap_or_default();
                     my_cards.into_iter().fold(h, |h, card| h
                         .node("label", |h| h
-                            .class("card")
+                            .a(Class, "card")
                             .node("input", |h| h
-                                .r#type("checkbox")
-                                .attribute("name", format!("{}", card))
-                                .attribute("value", format!("{}", card))
-                                .hx_trigger("change")
-                                .hx_post("api/playable")
-                                .hx_include("#cards-to-play")
-                                .hx_target("#play-button")
-                                .hx_swap("outerHTML")
+                                .a(Type, "checkbox")
+                                .a(Name, format!("{}", card))
+                                .a(Value, format!("{}", card))
+                                .a(HxTrigger, "change")
+                                .a(HxPost, "api/playable")
+                                .a(HxInclude, "#cards-to-play")
+                                .a(HxTarget, "#play-button")
+                                .a(HxSwap, "outerHTML")
                             )
                             .node("img", |h| h
-                                .attribute("src", format!("cards/{}.svg", card))
-                                .attribute("alt", format!("{}", card))
+                                .a(Src, format!("cards/{}.svg", card))
+                                .a(Alt, format!("{}", card))
                             )
                         )
                     )

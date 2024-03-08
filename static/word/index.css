@@ -46,7 +46,7 @@ section {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     grid-auto-rows: 1fr;
-    gap: 10%;
+    gap: 7%;
 
     & > label {
         background: url('tile-background.jpg');
@@ -91,19 +91,21 @@ section {
     }
 
     @media (prefers-reduced-motion: no-preference) {
-        &.valid-word > label:has(> input[value]) {
+        &.valid-word:not(.already-spelled) > label:has(> input[value]) {
             animation: 300ms ease-in 0s happy-dance;
         }
     }
 
-    &.valid-word > label:has(> input[value]) {
+    &.valid-word:not(.already-spelled) > label:has(> input[value]) {
         color: oklch(71.66% 0.2 var(--hue));
     }
 }
 
 
 @keyframes happy-dance {
-    to { rotate: 359deg; }
+    to { 
+        rotate: 359deg; 
+    }
 }
 
 .spelled-word {
@@ -140,6 +142,7 @@ section {
     border: 3px solid black;
     border-radius: 4px;
     & > * {
+        background-color: red;
         height: 100%;
         width: 0%;
         animation-timing-function: linear;

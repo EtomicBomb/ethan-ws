@@ -32,53 +32,53 @@ function addTile(tile, tiles, mouseDown, dictionary, columns) {
     tile.firstChild.setAttribute('value', 1 + lastOrder);
 }
 
-function checkWord(dictionary, board, tiles) {
+function checkWord(dictionary, alreadySpelled, spelling, tiles) {
     const word = [...tiles.querySelectorAll(`[value]`)]
-        .sort((a, b) => +a.getAttribute('value') - +b.getAttribute('value'))
+        .sort((a, b) => a.getAttribute('value') - b.getAttribute('value'))
         .map(n => n.parentElement.childNodes[1].wholeText)
-        .join('')
-        .toLowerCase();
-    board.querySelector('.spelling').textContent = word;
+        .join('');
+    spelling.textContent = word;
     const validWord = dictionary.has(word);
     tiles.classList.toggle('valid-word', validWord);
-    if (validWord) {
+    tiles.classList.toggle('already-spelled', alreadySpelled.has(word));
+    if (validWord && !alreadySpelled.has(word)) {
         tiles.dispatchEvent(new CustomEvent('spell'));
+        alreadySpelled.add(word);
     }
 }
 
-let dictionary = new Set();
-
-fetch('words.txt')
-    .then(d => d.text())
-    .then(d => {
-        dictionary = new Set(d.split('\n'));
-    });
-
-htmx.onLoad(setupBoard);
-
-function setupBoard(root) {
-    console.log('hello', root);
+async function setupBoard(root) {
+    console.log(root);
     const tiles = root.querySelector('.tiles');
-    if (tiles === null) return;
-    const board = root.querySelector('.board');
+    const spelling = root.querySelector('.spelling');
+    if (tiles === null || spelling === null) return;
+    if (root.getAttribute('data-initialized')) return;
+    root.setAttribute('data-initialized', true); 
+
+    let dictionary;
+    dictionary = await fetch('words.txt');
+    dictionary = await dictionary.text();
+    dictionary = new Set(dictionary.split('\n'));
+
+    const alreadySpelled = new Set();
 
     let mouseDown = false;
 
     [...tiles.children].forEach(n => n.addEventListener('mousedown', e => {
         mouseDown = true;
         addTile(e.target, tiles, mouseDown, dictionary, 4);
-        checkWord(dictionary, board, tiles);
+        checkWord(dictionary, alreadySpelled, spelling, tiles);
     }));
 
     [...tiles.children].forEach(n => n.addEventListener('mouseenter', e => {
         addTile(e.target, tiles, mouseDown, dictionary, 4);
-        checkWord(dictionary, board, tiles);
+        checkWord(dictionary, alreadySpelled, spelling, tiles);
     }));
 
     document.addEventListener('mouseup', e => {
         mouseDown = false;
         tiles.querySelectorAll(`[value]`).forEach(n => n.removeAttribute('value'));
-        checkWord(dictionary, board, tiles);
+        checkWord(dictionary, alreadySpelled, spelling, tiles);
     });
 
 }

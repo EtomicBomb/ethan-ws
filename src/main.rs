@@ -56,7 +56,7 @@ async fn serve(on_port: u16) {
             HeaderValue::from_static("no-store, must-revalidate"),
         ));
 
-    let tls = RustlsConfig::from_pem_file("secrets/cert.pem", "secrets/key.pem")
+    let tls = RustlsConfig::from_pem_file("secret/cert.pem", "secret/key.pem")
         .await
         .unwrap();
 

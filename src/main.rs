@@ -24,7 +24,7 @@ mod word;
 
 #[tokio::main]
 async fn main() {
-    tokio::join!(serve(4430), redirect_http_to_https(8000, 4430));
+    tokio::join!(serve(443), redirect_http_to_https(80, 443));
 }
 
 async fn serve(on_port: u16) {

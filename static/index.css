@@ -19,8 +19,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 a {
-    color: teal;
-    font-family: 'Concert One';
+    color: inherit;
 }
 
 header {
@@ -94,6 +93,10 @@ h1.title::after {
     border: 2px solid teal;
 }
 
+.article-item {
+    font-family: 'Concert One';
+    color: teal;
+}
 
 .story::before {
     color: teal;

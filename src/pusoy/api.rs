@@ -437,7 +437,7 @@ impl Session {
                         game_state
                             .hand(seat)
                             .into_iter()
-                            .map(|card| card_id_cypher[&card].clone())
+                            .map(|card| card_id_cypher[&card])
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
@@ -942,12 +942,12 @@ enum Error {
     NotHost,
     Full,
     NotCurrent,
-    PlayError(PlayError),
+    Play(PlayError),
 }
 
 impl From<PlayError> for Error {
     fn from(error: PlayError) -> Error {
-        Self::PlayError(error)
+        Self::Play(error)
     }
 }
 
@@ -961,7 +961,7 @@ impl fmt::Display for Error {
             Self::NotHost => write!(f, "requests must have from host&"),
             Self::Full => write!(f, "can only connect sessions that aren't full"),
             Self::NotCurrent => write!(f, "this request should be made by the current player"),
-            Self::PlayError(error) => write!(f, "{}", error),
+            Self::Play(error) => write!(f, "{}", error),
         }
     }
 }
@@ -976,7 +976,7 @@ impl IntoResponse for Error {
             Self::NotHost => StatusCode::FORBIDDEN,
             Self::Full => StatusCode::BAD_REQUEST,
             Self::NotCurrent => StatusCode::BAD_REQUEST,
-            Self::PlayError(..) => StatusCode::BAD_REQUEST,
+            Self::Play(..) => StatusCode::BAD_REQUEST,
         };
         let body = self.to_string();
         (status, body).into_response()

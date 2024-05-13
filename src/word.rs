@@ -1,44 +1,40 @@
 use {
-    crate::{
-        htmx::{HtmlBuf, self, Attribute::*},
-    },
+    crate::htmx::{self, Attribute::*, HtmlBuf},
     async_trait::async_trait,
     axum::{
         debug_handler,
         extract::{FromRequestParts, State},
         response::{
             sse::{self, KeepAlive, Sse},
-            IntoResponse, Response, 
-            IntoResponseParts, ResponseParts, Html,
+            Html, IntoResponse, IntoResponseParts, Response, ResponseParts,
         },
         routing::{get, post, put},
-        Form, RequestPartsExt, Router, 
+        Form, RequestPartsExt, Router,
     },
-    axum_extra::{
-        TypedHeader,
-        extract::CookieJar,
-    },
+    axum_extra::{extract::CookieJar, TypedHeader},
     cookie::{Cookie, Expiration, SameSite},
     http::{request::Parts, status::StatusCode, HeaderValue},
-    once_cell::{sync::Lazy},
-    rand::{thread_rng, Rng, distributions::{Distribution, weighted::WeightedIndex}},
+    once_cell::sync::Lazy,
+    rand::{
+        distributions::{weighted::WeightedIndex, Distribution},
+        thread_rng, Rng,
+    },
     serde::{Deserialize, Serialize},
     std::{
-        collections::{HashSet, HashMap, VecDeque},
+        cmp,
+        collections::{HashMap, HashSet, VecDeque},
         convert::Infallible,
         fmt::{self},
-        ops::{Deref},
+        fs, iter,
+        ops::Deref,
         str::FromStr,
         sync::Arc,
         time::Duration,
-        iter,
-        cmp,
-        fs,
     },
     tokio::{
         sync::mpsc::{self, UnboundedSender},
         sync::{Mutex, OwnedMutexGuard},
-        time::{Instant},
+        time::Instant,
     },
     tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt},
     uuid::Uuid,
@@ -77,13 +73,15 @@ async fn connect(
         {
             (user_session.auth, None)
         }
-        (_, Some(url_session_id)) => match state.add_player_existing_session(url_session_id).await {
-            Ok(auth) => (auth, None),
-            Err(reconnect_reason) => {
-                let auth = state.add_player_new_session(1).await?;
-                (auth, Some(reconnect_reason))
+        (_, Some(url_session_id)) => {
+            match state.add_player_existing_session(url_session_id).await {
+                Ok(auth) => (auth, None),
+                Err(reconnect_reason) => {
+                    let auth = state.add_player_new_session(1).await?;
+                    (auth, Some(reconnect_reason))
+                }
             }
-        },
+        }
         (_, None) => {
             let auth = state.add_player_new_session(1).await?;
             (auth, None)
@@ -94,120 +92,114 @@ async fn connect(
         .clear()
         .append_pair("session_id", &format!("{}", auth.session_id));
 
-    let html = HtmlBuf::default()
-        .node("main", |h| h
-            .a(HxTrigger, "load")
+    let html = HtmlBuf::default().node("main", |h| {
+        h.a(HxTrigger, "load")
             .a(HxGet, "api/render")
             .a(HxSwap, "outerHTML")
-        );
+    });
 
-    Ok((*auth, TypedHeader(htmx::response::ReplaceUrl(url)), Html(html)))
+    Ok((
+        *auth,
+        TypedHeader(htmx::response::ReplaceUrl(url)),
+        Html(html),
+    ))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn render(
-    user_session: UserSession<Authenticated>,
-) -> Result<impl IntoResponse> {
+async fn render(user_session: UserSession<Authenticated>) -> Result<impl IntoResponse> {
     let h = HtmlBuf::default();
     let html = match user_session.session.phase(user_session.auth).await? {
-        Phase::NeedsOpponent => h
-            .node("main", |h| h
-                .a(HxExt, "sse")
+        Phase::NeedsOpponent => h.node("main", |h| {
+            h.a(HxExt, "sse")
                 .a(SseConnect, "api/wait-lobby")
-                .node("div", |h| h
-                    .a(HxTrigger, "sse:message")
-                    .a(HxPost, "api/connect")
-                    .a(HxTarget, "closest main")
-                    .a(HxSwap, "outerHTML")
-                    .node("h1", |h| h
-                        .text("Word search game")
-                    )
-                    .node("p", |h| h
-                        .text("Share the link in the address bar with your opponent.")
-                    )
-                    .node("p", |h| h
-                        .text("Waiting for your opponent to click the link.")
-                    )
-                    .node("button", |h| h
-                        .a(HxPost, "api/clear")
-                        .text("Forget about this game and make a new one.")
-                    )
-                    .node("button", |h| h
-                        .text("Play singleplayer (coming soon)")
-                    )
-                )
-            ),
-        Phase::Start => h
-            .node("main", |h| h
-                .a(Class, "page")
+                .node("div", |h| {
+                    h.a(HxTrigger, "sse:message")
+                        .a(HxPost, "api/connect")
+                        .a(HxTarget, "closest main")
+                        .a(HxSwap, "outerHTML")
+                        .node("h1", |h| h.text("Word search game"))
+                        .node("p", |h| {
+                            h.text("Share the link in the address bar with your opponent.")
+                        })
+                        .node("p", |h| {
+                            h.text("Waiting for your opponent to click the link.")
+                        })
+                        .node("button", |h| {
+                            h.a(HxPost, "api/clear")
+                                .text("Forget about this game and make a new one.")
+                        })
+                        .node("button", |h| h.text("Play singleplayer (coming soon)"))
+                })
+        }),
+        Phase::Start => h.node("main", |h| {
+            h.a(Class, "page")
                 .a(HxTrigger, "start-game from:body")
                 .a(HxGet, "api/render")
                 .a(HxSwap, "outerHTML")
-                .node("p", |h| h
-                    .text("You have an opponent! Start your game when you're ready.")
-                )
-                .node("button", |h| h
-                    .a(HxPost, "api/start")
-                    .a(HxSwap, "none")
-                    .text("Start now")
-                )
-            ),
-        Phase::Main { turn_remaining, board } => h
-            .node("main", |h| h
-                .a(HxTrigger, format!("load delay:{}ms", turn_remaining.as_millis()))
-                .a(HxGet, "api/render")
-                .a(HxSwap, "outerHTML")
-                .hx_on("htmx:load", "setupBoard(this)")
-                .node("section", |h| h
-                    .a(Class, "banner")
-                    .node("div", |h| h
-                        .a(Class, "spelling")
-                    )
-                    .node("div", |h| h
-                        .a(Class, "spelled")
-                    )
-                    .node("div", |h| h
-                        .a(Class, "clock")
-                        .node("div", |h| h
-                            .a(Style, format!("animation-duration: {}ms;", turn_remaining.as_millis()))
-                        )
-                    )
-                    .node("div", |h| h
-                        .a(Class, "scoreboard")
-                        .a(HxTrigger, "load, score-refresh from:body")
-                        .a(HxGet, "api/score")
-                        .a(HxTarget, "this")
-                        .a(HxSwap, "innerHTML")
-                    )
-                )
-                .chain(|h| board.render(h))
-            ),
-        Phase::Post { you_spelled, others_spelled } => h
-            .node("main", |h| h
-                .node("h1", |h| h
-                    .text("Thank you for playing")
-                )
-                .node("section", |h| h
-                    .a(Class, "you spelled")
-                    .chain(|h| render_spelled(you_spelled, h))
-                )
-                .chain(|h| {
-                    others_spelled.iter().fold(h, |h, others| h
-                        .node("section", |h| h
-                            .a(Class, "others spelled")
-                            .chain(|h| render_spelled(others, h))
-                        )
-                    )
+                .node("p", |h| {
+                    h.text("You have an opponent! Start your game when you're ready.")
                 })
-                .node("button", |h| h
-                    .a(HxPost, "api/clear")
-                    .a(HxTarget, "closest main")
-                    .text("Forget about this session and make a new one.")
-                )
-                .node("button", |h| h
-                    .text("Play another round")
-                )
-            ),
+                .node("button", |h| {
+                    h.a(HxPost, "api/start").a(HxSwap, "none").text("Start now")
+                })
+        }),
+        Phase::Main {
+            turn_remaining,
+            board,
+        } => h.node("main", |h| {
+            h.a(
+                HxTrigger,
+                format!("load delay:{}ms", turn_remaining.as_millis()),
+            )
+            .a(HxGet, "api/render")
+            .a(HxSwap, "outerHTML")
+            .hx_on("htmx:load", "setupBoard(this)")
+            .node("section", |h| {
+                h.a(Class, "banner")
+                    .node("div", |h| h.a(Class, "spelling"))
+                    .node("div", |h| h.a(Class, "spelled"))
+                    .node("div", |h| {
+                        h.a(Class, "clock").node("div", |h| {
+                            h.a(
+                                Style,
+                                format!("animation-duration: {}ms;", turn_remaining.as_millis()),
+                            )
+                        })
+                    })
+                    .node("div", |h| {
+                        h.a(Class, "scoreboard")
+                            .a(HxTrigger, "load, score-refresh from:body")
+                            .a(HxGet, "api/score")
+                            .a(HxTarget, "this")
+                            .a(HxSwap, "innerHTML")
+                    })
+            })
+            .chain(|h| board.render(h))
+        }),
+        Phase::Post {
+            you_spelled,
+            others_spelled,
+        } => h.node("main", |h| {
+            h.node("h1", |h| h.text("Thank you for playing"))
+                .node("section", |h| {
+                    h.a(Class, "you spelled")
+                        .chain(|h| render_spelled(you_spelled, h))
+                })
+                .chain(|h| {
+                    others_spelled.iter().fold(h, |h, others| {
+                        h.node("section", |h| {
+                            h.a(Class, "others spelled")
+                                .chain(|h| render_spelled(others, h))
+                        })
+                    })
+                })
+                .node("button", |h| {
+                    h.a(HxPost, "api/clear")
+                        .a(HxTarget, "closest main")
+                        .text("Forget about this session and make a new one.")
+                })
+                .node("button", |h| h.text("Play another round"))
+        }),
     };
 
     Ok(Html(html))
@@ -219,18 +211,11 @@ fn render_spelled(spelled: &HashSet<String>, h: HtmlBuf) -> HtmlBuf {
 
 fn render_word_score(word: &str, html: HtmlBuf) -> HtmlBuf {
     let points = score_word(word);
-    html
-        .node("p", |h| h
-            .a(Class, "word-score")
-            .node("span", |h| h
-                .a(Class, "word")
-                .text(word)
-            )
-            .node("span", |h| h
-                .a(Class, "score")
-                .text(format!("{}", points))
-            )
-        )
+    html.node("p", |h| {
+        h.a(Class, "word-score")
+            .node("span", |h| h.a(Class, "word").text(word))
+            .node("span", |h| h.a(Class, "score").text(format!("{}", points)))
+    })
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
@@ -264,49 +249,34 @@ async fn spell(
         .filter_map(|(board_position, order)| Some((order.parse::<u32>().ok()?, board_position)))
         .collect();
     word.sort_by(|a, b| a.0.cmp(&b.0));
-    let word = word.into_iter().map(|(_, board_position)| board_position).collect::<Vec<_>>();
+    let word = word
+        .into_iter()
+        .map(|(_, board_position)| board_position)
+        .collect::<Vec<_>>();
     dbg!(&word);
-    let word = user_session
-        .session
-        .spell(user_session.auth, &word)
-        .await?;
+    let word = user_session.session.spell(user_session.auth, &word).await?;
     let html = HtmlBuf::default();
     let (status_code, html) = match word {
         Some(word) => {
-            let html = html
-                .node("p", |h| h
-                    .a(Class, "spelled")
-                    .node("span", |h| h
-                        .a(Class, "word")
-                        .text(&word)
-                    )
-                    .node("span", |h| h
-                        .a(Class, "points")
-                        .text(format!("+{}", score_word(&word)))
-                    )
-                );
+            let html = html.node("p", |h| {
+                h.a(Class, "spelled")
+                    .node("span", |h| h.a(Class, "word").text(&word))
+                    .node("span", |h| {
+                        h.a(Class, "points").text(format!("+{}", score_word(&word)))
+                    })
+            });
             (StatusCode::CREATED, html)
         }
-        None => {
-            (StatusCode::NO_CONTENT, html)
-        }
+        None => (StatusCode::NO_CONTENT, html),
     };
     let score_refresh = htmx::response::Trigger(HeaderValue::from_static("score-refresh"));
     Ok((status_code, TypedHeader(score_refresh), Html(html)))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
-async fn score(
-    mut user_session: UserSession<Authenticated>,
-) -> Result<impl IntoResponse> {
-    let score = user_session
-        .session
-        .score(user_session.auth)
-        .await?;
-    let html = HtmlBuf::default()
-        .node("span", |h| h
-            .text(format!("{}", score))
-        );
+async fn score(mut user_session: UserSession<Authenticated>) -> Result<impl IntoResponse> {
+    let score = user_session.session.score(user_session.auth).await?;
+    let html = HtmlBuf::default().node("span", |h| h.text(format!("{}", score)));
     Ok(Html(html))
 }
 
@@ -314,23 +284,14 @@ async fn score(
 async fn clear(
     TypedHeader(htmx::request::CurrentUrl(mut url)): TypedHeader<htmx::request::CurrentUrl>,
 ) -> Result<impl IntoResponse> {
-//    let cookie = Cookie::build(("auth", ""))
-//        .secure(true)
-//        .http_only(true)
-//        .max_age(time::Duration::ZERO)
-//        .same_site(SameSite::Strict)
-//        .build();
-//    let cookie = CookieJar::new().add(cookie);
-//
     url.query_pairs_mut().clear();
     let replace_url = htmx::response::ReplaceUrl(url);
 
-    let html = HtmlBuf::default()
-        .node("main", |h| h
-            .a(HxTrigger, "load")
+    let html = HtmlBuf::default().node("main", |h| {
+        h.a(HxTrigger, "load")
             .a(HxPost, "api/connect")
             .a(HxTarget, "closest main")
-        );
+    });
 
     Ok((TypedHeader(replace_url), Html(html)))
 }
@@ -348,7 +309,10 @@ impl ApiState {
         }
     }
 
-    async fn add_player_new_session(&mut self, target_player_count: usize) -> Result<Authenticated> {
+    async fn add_player_new_session(
+        &mut self,
+        target_player_count: usize,
+    ) -> Result<Authenticated> {
         if self.expiry.len() > 1000 {
             let removed = self.expiry.pop_front().unwrap();
             self.sessions.remove(&removed);
@@ -361,7 +325,10 @@ impl ApiState {
         Ok(auth)
     }
 
-    async fn add_player_existing_session(&mut self, session_id: SessionId) -> Result<Authenticated> {
+    async fn add_player_existing_session(
+        &mut self,
+        session_id: SessionId,
+    ) -> Result<Authenticated> {
         let session = self.get_session(session_id).await?;
         let auth = session.lock().await.add_player().await?;
         Ok(auth)
@@ -428,13 +395,21 @@ impl Session {
         };
         let Some(turn_remaining) = turn_expires.checked_duration_since(Instant::now()) else {
             let you_spelled = &self.players[&auth.user_secret].spelled;
-            let others_spelled = self.players.iter()
+            let others_spelled = self
+                .players
+                .iter()
                 .filter(|&(&k, _)| k != auth.user_secret)
                 .map(|(_, v)| &v.spelled)
                 .collect::<Vec<_>>();
-            return Ok(Phase::Post { you_spelled, others_spelled });
+            return Ok(Phase::Post {
+                you_spelled,
+                others_spelled,
+            });
         };
-        Ok(Phase::Main { turn_remaining, board: &self.board })
+        Ok(Phase::Main {
+            turn_remaining,
+            board: &self.board,
+        })
     }
 
     pub async fn add_player(&mut self) -> Result<Authenticated> {
@@ -442,15 +417,20 @@ impl Session {
             return Err(Error::TooManyPlayers);
         }
         for player in self.players.values() {
-            let Some(tx) = player.tx.as_ref() else { continue };
+            let Some(tx) = player.tx.as_ref() else {
+                continue;
+            };
             let _ = tx.send(());
         }
         let user_secret = UserSecret::generate(&mut thread_rng());
-        self.players.insert(user_secret, Player {
-            tx: None,
-            spelled: HashSet::default(),
-            turn_expires: None,
-        });
+        self.players.insert(
+            user_secret,
+            Player {
+                tx: None,
+                spelled: HashSet::default(),
+                turn_expires: None,
+            },
+        );
         Ok(Authenticated {
             auth: Unauthenticated {
                 user_secret,
@@ -463,7 +443,11 @@ impl Session {
         if self.players.len() != self.target_player_count {
             return Err(Error::NotEnoughPlayers);
         }
-        let turn_expires = &mut self.players.get_mut(&auth.user_secret).unwrap().turn_expires;
+        let turn_expires = &mut self
+            .players
+            .get_mut(&auth.user_secret)
+            .unwrap()
+            .turn_expires;
         if turn_expires.is_some() {
             return Err(Error::AlreadyStarted);
         }
@@ -471,14 +455,23 @@ impl Session {
         Ok(())
     }
 
-    pub async fn spell(&mut self, auth: Authenticated, word: &[BoardPosition]) -> Result<Option<String>> {
+    pub async fn spell(
+        &mut self,
+        auth: Authenticated,
+        word: &[BoardPosition],
+    ) -> Result<Option<String>> {
         let player = &self.players[&auth.user_secret];
         if player.turn_expires.ok_or(Error::NotStarted)? < Instant::now() {
             return Err(Error::NotStarted);
         }
         let word = self.board.spell(word)?;
         dbg!(&word);
-        let newly_spelled = self.players.get_mut(&auth.user_secret).unwrap().spelled.insert(word.clone());
+        let newly_spelled = self
+            .players
+            .get_mut(&auth.user_secret)
+            .unwrap()
+            .spelled
+            .insert(word.clone());
         if newly_spelled {
             Ok(Some(word))
         } else {
@@ -487,14 +480,14 @@ impl Session {
     }
 
     pub async fn score(&mut self, auth: Authenticated) -> Result<usize> {
-        Ok(self.players[&auth.user_secret].spelled.iter().map(|word| score_word(word)).sum())
+        Ok(self.players[&auth.user_secret]
+            .spelled
+            .iter()
+            .map(|word| score_word(word))
+            .sum())
     }
 
-    pub async fn wait_lobby(
-        &mut self,
-        auth: Authenticated,
-        tx: UnboundedSender<()>,
-    ) -> Result<()> {
+    pub async fn wait_lobby(&mut self, auth: Authenticated, tx: UnboundedSender<()>) -> Result<()> {
         self.players.get_mut(&auth.user_secret).unwrap().tx = Some(tx);
         Ok(())
     }
@@ -531,7 +524,10 @@ struct Board {
 impl Board {
     fn generate<R: Rng>(mut rng: R, rows: usize, cols: usize) -> Self {
         // https://en.wikipedia.org/wiki/Letter_frequency
-        let weights = [8.2,1.5,2.8,4.3,12.7,2.2,2.0,6.1,7.0,0.15,0.77,4.0,2.4,6.7,7.5,1.9,0.095,6.0,6.3,9.1,2.8,0.98,2.4,0.15,2.0,0.074];
+        let weights = [
+            8.2, 1.5, 2.8, 4.3, 12.7, 2.2, 2.0, 6.1, 7.0, 0.15, 0.77, 4.0, 2.4, 6.7, 7.5, 1.9,
+            0.095, 6.0, 6.3, 9.1, 2.8, 0.98, 2.4, 0.15, 2.0, 0.074,
+        ];
         let dist = WeightedIndex::new(&weights).unwrap();
         let tiles = iter::repeat_with(|| dist.sample(&mut rng))
             .map(|i| u32::try_from(i).unwrap())
@@ -544,8 +540,8 @@ impl Board {
 
     fn spell(&self, positions: &[BoardPosition]) -> Result<String> {
         static DICTIONARY: Lazy<HashSet<String>> = Lazy::new(|| {
-            let dictionary = fs::read_to_string("static/word/words.txt")
-                .expect("should find dictionary file");
+            let dictionary =
+                fs::read_to_string("static/word/words.txt").expect("should find dictionary file");
             dictionary.lines().map(ToString::to_string).collect()
         });
         let mut seen: HashSet<BoardPosition> = HashSet::default();
@@ -568,24 +564,20 @@ impl Board {
     }
 
     fn render(&self, html: HtmlBuf) -> HtmlBuf {
-        html
-            .node("form", |h| {
-                let h = h 
-                    .a(Class, "tiles")
-                    .a(HxTrigger, "spell")
-                    .a(HxPut, "api/spell")
-                    .a(HxTarget, "previous .spelled")
-                    .a(HxSwap, "afterbegin");
-                self.tiles.iter().enumerate().fold(h, |h, (i, letter)| h
-                    .node("label", |h| h
-                        .node("input", |h| h
-                            .a(Type, "hidden")
-                            .a(Name, format!("{}", i))
-                        )
+        html.node("form", |h| {
+            let h = h
+                .a(Class, "tiles")
+                .a(HxTrigger, "spell")
+                .a(HxPut, "api/spell")
+                .a(HxTarget, "previous .spelled")
+                .a(HxSwap, "afterbegin");
+            self.tiles.iter().enumerate().fold(h, |h, (i, letter)| {
+                h.node("label", |h| {
+                    h.node("input", |h| h.a(Type, "hidden").a(Name, format!("{}", i)))
                         .text(format!("{}", letter))
-                    )
-                )
+                })
             })
+        })
     }
 }
 

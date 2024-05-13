@@ -18,8 +18,8 @@ use {
 };
 
 mod htmx;
-mod records;
 mod pusoy;
+mod records;
 mod word;
 
 #[tokio::main]

@@ -1,8 +1,8 @@
+mod api;
 mod bot;
 mod cards;
 mod plays;
 mod state;
-mod api;
 
 pub(super) use bot::choose_play;
 pub(super) use cards::{Card, Cards};

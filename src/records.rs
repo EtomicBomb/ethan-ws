@@ -1,4 +1,5 @@
 use {
+    arc_swap::ArcSwap,
     async_trait::async_trait,
     axum::{
         extract::{FromRequestParts, Path},
@@ -11,13 +12,12 @@ use {
     },
     http::{request::Parts, status::StatusCode},
     serde::{Deserialize, Serialize},
-    std::{collections::HashMap, convert::Infallible, sync::{Arc}},
+    std::{collections::HashMap, convert::Infallible, sync::Arc},
     tokio::{
         sync::mpsc::{unbounded_channel, UnboundedSender},
         sync::{Mutex, OwnedMutexGuard},
     },
     tokio_stream::{wrappers::UnboundedReceiverStream, Stream, StreamExt},
-    arc_swap::{ArcSwap},
 };
 
 pub fn api<S, I: IntoIterator<Item = T>, T: Into<String>>(tables: I) -> Router<S> {
@@ -39,7 +39,10 @@ async fn record_create(
 ) -> impl IntoResponse {
     table.next_record_id.0 += 1;
     let id = RecordId(table.next_record_id.0);
-    let update = Update { id, record: Arc::clone(&record) };
+    let update = Update {
+        id,
+        record: Arc::clone(&record),
+    };
     table.notify(Notification::Create(update.clone())).await;
     table.records.insert(id, ArcSwap::new(record));
     Json(update)
@@ -52,16 +55,16 @@ async fn record_update(
     }: TableIdExtract,
     Json(record): Json<Record>,
 ) -> Result<impl IntoResponse> {
-    let existing_place = table
-        .records
-        .get(&record_id)
-        .ok_or(Error::RecordNotFound)?;
+    let existing_place = table.records.get(&record_id).ok_or(Error::RecordNotFound)?;
     let mut existing = (**existing_place.load()).clone();
     existing.fields.extend(record.fields);
     let existing = Arc::new(existing);
     existing_place.store(Arc::clone(&existing));
 
-    let update = Update { id: record_id, record: existing };
+    let update = Update {
+        id: record_id,
+        record: existing,
+    };
     table.notify(Notification::Update(update.clone())).await;
     Ok(Json(update))
 }
@@ -78,7 +81,10 @@ async fn record_delete(
         .ok_or(Error::RecordNotFound)?
         .load()
         .clone();
-    let update = Update { id: record_id, record };
+    let update = Update {
+        id: record_id,
+        record,
+    };
     table.notify(Notification::Delete(update.clone())).await;
     Ok(Json(update))
 }
@@ -87,7 +93,10 @@ async fn record_read_id(
     TableIdExtract { table, record_id }: TableIdExtract,
 ) -> Result<impl IntoResponse> {
     let record = table.records.get(&record_id).ok_or(Error::RecordNotFound)?;
-    Ok(Json(Update { id: record_id, record: Arc::clone(&record.load()) }))
+    Ok(Json(Update {
+        id: record_id,
+        record: Arc::clone(&record.load()),
+    }))
 }
 
 async fn record_read_query(
@@ -104,7 +113,10 @@ async fn record_read_query(
                 .iter()
                 .all(|(key, value)| r.fields.get(key) == Some(value))
         })
-        .map(|(&id, r)| Update { id, record: Arc::clone(&r) })
+        .map(|(&id, r)| Update {
+            id,
+            record: Arc::clone(&r),
+        })
         .collect();
     Ok(Json(existing))
 }
@@ -141,7 +153,8 @@ struct Table {
 impl Table {
     async fn notify(&mut self, notification: Notification) {
         let notification = serde_json::to_string(&notification).unwrap();
-        self.subscribers.retain(|stream| stream.send(notification.clone()).is_ok());
+        self.subscribers
+            .retain(|stream| stream.send(notification.clone()).is_ok());
     }
 
     fn new_subscriber(&mut self) -> impl Stream<Item = String> {

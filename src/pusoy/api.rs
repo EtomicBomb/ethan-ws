@@ -1,23 +1,18 @@
 use {
     super::{choose_play, Card, Cards, GameState, Play, PlayError, Relative, Seat, SeatMap},
-    crate::htmx::{self, HtmlBuf, Attribute::*},
+    crate::htmx::{self, Attribute::*, HtmlBuf},
     async_trait::async_trait,
     axum::{
         debug_handler,
         extract::{FromRequestParts, State},
         response::{
             sse::{self, KeepAlive, Sse},
-            IntoResponse, Response, 
-            IntoResponseParts, ResponseParts,
-                Html,
+            Html, IntoResponse, IntoResponseParts, Response, ResponseParts,
         },
         routing::{get, post, put},
-        Form, RequestPartsExt, Router, 
+        Form, RequestPartsExt, Router,
     },
-    axum_extra::{
-        TypedHeader,
-        extract::CookieJar,
-    },
+    axum_extra::{extract::CookieJar, TypedHeader},
     cookie::{Cookie, Expiration, SameSite},
     futures::future::BoxFuture,
     http::{request::Parts, status::StatusCode},
@@ -99,26 +94,29 @@ async fn connect(
         .append_pair("session_id", &format!("{}", auth.session_id));
 
     let html = HtmlBuf::default()
-        .node("div", |h| h
-            .a(HxTrigger, "every 30s")
-            .a(HxPost, "api/keep-alive")
-        )
-        .node("div", |h| h
-            .a(HxExt, "sse")
-            .a(HxExt, "morph")
-            .a(SseConnect, "api/subscribe")
-            .node("main", |h| h
-                .a(HxTrigger, "load, sse:message")
-                .a(HxGet, "api/state")
-                .a(HxSwap, "morph:innerHTML")
-            )
-            .node("div", |h| h
-                .chain_if_some(reconnect_reason, |h, reconnect_reason| h
-                    .text(format!("{}", reconnect_reason))
-                )
-            )
-        );
-    Ok((*auth, TypedHeader(htmx::response::ReplaceUrl(url)), Html(html)))
+        .node("div", |h| {
+            h.a(HxTrigger, "every 30s").a(HxPost, "api/keep-alive")
+        })
+        .node("div", |h| {
+            h.a(HxExt, "sse")
+                .a(HxExt, "morph")
+                .a(SseConnect, "api/subscribe")
+                .node("main", |h| {
+                    h.a(HxTrigger, "load, sse:message")
+                        .a(HxGet, "api/state")
+                        .a(HxSwap, "morph:innerHTML")
+                })
+                .node("div", |h| {
+                    h.chain_if_some(reconnect_reason, |h, reconnect_reason| {
+                        h.text(format!("{}", reconnect_reason))
+                    })
+                })
+        });
+    Ok((
+        *auth,
+        TypedHeader(htmx::response::ReplaceUrl(url)),
+        Html(html),
+    ))
 }
 
 #[debug_handler(state=Arc<Mutex<ApiState>>)]
@@ -184,23 +182,28 @@ async fn playable(
     let label = if cards.is_empty() { "pass" } else { "play" };
     let off_turn = matches!(playable, Err(Error::NotCurrent));
     Ok(Html(match playable.as_ref() {
-        Ok(_play) => HtmlBuf::default()
-            .node("button", |h| h
-                .a(Type, "submit")
+        Ok(_play) => HtmlBuf::default().node("button", |h| {
+            h.a(Type, "submit")
                 .a(Id, "play-button")
                 .a(HxPost, "api/play")
                 .a(HxInclude, "#cards-to-play")
                 .text(label)
-            ),
-        Err(error) => HtmlBuf::default()
-            .node("button", |h| h
-                .a(Type, "submit")
+        }),
+        Err(error) => HtmlBuf::default().node("button", |h| {
+            h.a(Type, "submit")
                 .a(Id, "play-button")
                 .a(Disabled, "")
                 .a(Title, format!("{}", error))
-                .a(Class, if off_turn { "playable-off-turn" } else { "playable-error" })
+                .a(
+                    Class,
+                    if off_turn {
+                        "playable-off-turn"
+                    } else {
+                        "playable-error"
+                    },
+                )
                 .text(label)
-            ),
+        }),
     }))
 }
 
@@ -214,7 +217,7 @@ async fn play(
         .session
         .human_play(user_session.auth, cards)
         .await
-} 
+}
 
 struct ApiState {
     sessions: HashMap<SessionId, Arc<Mutex<Session>>>,
@@ -418,185 +421,166 @@ impl Session {
     pub async fn view(&mut self, auth: Authenticated) -> HtmlBuf {
         let game_state = &self.game_state;
         let phase = self.phase;
-        let table_cards = self.game_state.cards_on_table().map(Play::cards).unwrap_or_default();
+        let table_cards = self
+            .game_state
+            .cards_on_table()
+            .map(Play::cards)
+            .unwrap_or_default();
         let card_id_cypher = &self.card_id_cypher;
 
         let template_hidden = |html: HtmlBuf, relative: Relative| -> HtmlBuf {
             let seat = auth.seat.relative(relative);
-            html
-                .node("div", |h| {
-                    let h = h.a(Class, format!("cards player {}", relative));
-                    let cards = matches!(phase, Phase::Active | Phase::Post)
-                        .then(|| game_state.hand(seat).into_iter().map(|card| card_id_cypher[&card].clone()).collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    cards.into_iter().fold(h, |h, card| h
-                        .node("label", |h| h
-                            .a(Class, "card")
+            html.node("div", |h| {
+                let h = h.a(Class, format!("cards player {}", relative));
+                let cards = matches!(phase, Phase::Active | Phase::Post)
+                    .then(|| {
+                        game_state
+                            .hand(seat)
+                            .into_iter()
+                            .map(|card| card_id_cypher[&card].clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                cards.into_iter().fold(h, |h, card| {
+                    h.node("label", |h| {
+                        h.a(Class, "card")
                             .a(Id, format!("card_id_cypher-{}", card))
-                            .node("img", |h| h
-                                .a(Src, "cards/back.svg")
-                                .a(Alt, "hidden card")
-                            )
-                        )
-                    )
+                            .node("img", |h| h.a(Src, "cards/back.svg").a(Alt, "hidden card"))
+                    })
                 })
+            })
         };
         let template_info = |html: HtmlBuf, relative: Relative| -> HtmlBuf {
             let seat = auth.seat.relative(relative);
-            let load = matches!(phase, Phase::Active | Phase::Post).then(|| game_state.hand(seat).len()).unwrap_or(13);
+            let load = matches!(phase, Phase::Active | Phase::Post)
+                .then(|| game_state.hand(seat).len())
+                .unwrap_or(13);
             let is_human = self.is_human(seat);
             let control = matches!(phase, Phase::Active) && game_state.has_control(seat);
             let played = matches!(phase, Phase::Active) && game_state.played(seat);
             let winning = game_state.winning_player() == Some(seat);
             let turn = matches!(phase, Phase::Active) && game_state.current_player() == seat;
-            let host_controls = matches!(phase, Phase::Lobby) && relative == Relative::My && self.is_host(seat);
+            let host_controls =
+                matches!(phase, Phase::Lobby) && relative == Relative::My && self.is_host(seat);
             let play_button = matches!(phase, Phase::Active) && relative == Relative::My;
-            html
-                .node("section", |h| h
-                    .a(Class, format!("info {}", relative))
-                    .node("h2", |h| h
-                        .text(format!("{}", seat))
-                    )
-                    .node("div", |h| h
-                        .text(format!("{}", load))
-                    )
-                    .node("div", |h| h
-                        .chain_if(!is_human, |h| h
-                            .node("img", |h| h
-                                .a(Src, "bot.svg")
-                                .a(Alt, "player is bot")
-                            )
-                        )
-                    )
-                    .node("div", |h| h
-                    )
-                    .node("div", |h| h
-                        .chain_if(turn, |h| h
-                            .node("img", |h| h
-                                .a(Src, "turn.svg")
-                                .a(Alt, "player's turn")
-                            )
-                        )
-                    )
-                    .node("div", |h| h
-                        .chain_if(winning, |h| h
-                            .node("img", |h| h
-                                .a(Src, "win.svg")
-                                .a(Alt, "player won")
-                            )
-                        )
-                        .chain_if(!winning && control, |h| h
-                            .node("img", |h| h
-                                .a(Src, "control.svg")
-                                .a(Alt, "player has control")
-                            )
-                        )
-                        .chain_if(!winning && !control && played, |h| h
-                            .node("img", |h| h
-                                .a(Src, "played.svg")
-                                .a(Alt, "player played")
-                            )
-                        )
-                    )
-                    .node("div", |h| h
-                        .chain_if(host_controls, |h| h
-                            .node("form", |h| h
-                                .a(Id, "timer-controls")
-                                .a(HxPut, "api/timer")
-                                .a(HxTrigger, "load, input")
-                                .a(HxSwap, "none")
-                                .node("label", |h| h
-                                    .text("enable action timer")
-                                    .node("input", |h| h
-                                        .a(Type, "checkbox")
-                                        .a(Name, "enable-timer")
-                                    )
-                                )
-                                .node("label", |h| h
-                                    .text("timer value")
-                                    .node("input", |h| h
-                                        .a(Type, "range")
-                                        .a(Min, "5000")
-                                        .a(Value, "5000")
-                                        .a(Max, "200000")
-                                        .a(Name, "timer-value")
-                                    )
-                                )
-                            )
-                            .node("button", |h| h
-                                .a(HxPost, "api/start")
-                                .text("start the game")
-                            )
-                        )
-                        .chain_if(play_button, |h| h
-                            .node("button", |h| h
-                                .a(Id, "play-button")
-                                .a(HxTrigger, "load")
-                                .a(HxPost, "api/playable")
-                                .a(HxSwap, "outerHTML")
-                                .text("play")
-                            )
-                        )
-                    )
-                )
+            html.node("section", |h| {
+                h.a(Class, format!("info {}", relative))
+                    .node("h2", |h| h.text(format!("{}", seat)))
+                    .node("div", |h| h.text(format!("{}", load)))
+                    .node("div", |h| {
+                        h.chain_if(!is_human, |h| {
+                            h.node("img", |h| h.a(Src, "bot.svg").a(Alt, "player is bot"))
+                        })
+                    })
+                    .node("div", |h| h)
+                    .node("div", |h| {
+                        h.chain_if(turn, |h| {
+                            h.node("img", |h| h.a(Src, "turn.svg").a(Alt, "player's turn"))
+                        })
+                    })
+                    .node("div", |h| {
+                        h.chain_if(winning, |h| {
+                            h.node("img", |h| h.a(Src, "win.svg").a(Alt, "player won"))
+                        })
+                        .chain_if(!winning && control, |h| {
+                            h.node("img", |h| {
+                                h.a(Src, "control.svg").a(Alt, "player has control")
+                            })
+                        })
+                        .chain_if(!winning && !control && played, |h| {
+                            h.node("img", |h| h.a(Src, "played.svg").a(Alt, "player played"))
+                        })
+                    })
+                    .node("div", |h| {
+                        h.chain_if(host_controls, |h| {
+                            h.node("form", |h| {
+                                h.a(Id, "timer-controls")
+                                    .a(HxPut, "api/timer")
+                                    .a(HxTrigger, "load, input")
+                                    .a(HxSwap, "none")
+                                    .node("label", |h| {
+                                        h.text("enable action timer").node("input", |h| {
+                                            h.a(Type, "checkbox").a(Name, "enable-timer")
+                                        })
+                                    })
+                                    .node("label", |h| {
+                                        h.text("timer value").node("input", |h| {
+                                            h.a(Type, "range")
+                                                .a(Min, "5000")
+                                                .a(Value, "5000")
+                                                .a(Max, "200000")
+                                                .a(Name, "timer-value")
+                                        })
+                                    })
+                            })
+                            .node("button", |h| {
+                                h.a(HxPost, "api/start").text("start the game")
+                            })
+                        })
+                        .chain_if(play_button, |h| {
+                            h.node("button", |h| {
+                                h.a(Id, "play-button")
+                                    .a(HxTrigger, "load")
+                                    .a(HxPost, "api/playable")
+                                    .a(HxSwap, "outerHTML")
+                                    .text("play")
+                            })
+                        })
+                    })
+            })
         };
 
-        HtmlBuf::default()
-            .node("div", |h| h
-                .a(Class, "scene-wrap")
-                .node("div", |h| h
-                    .a(Class, "scene")
-                    .node("section", |h| h
-                        .a(Class, "table")
-                        .node("div", |h| {
-                            let h = h.a(Class, "cards");
-                            table_cards.into_iter().fold(h, |h, card| h
-                                .node("div", |h| h
-                                    .a(Class, "card")
-                                    .node("img", |h| h
-                                        .a(Src, format!("cards/{}.svg", card))
-                                        .a(Alt, format!("{}", card))
-                                    )
-                                )
-                            )
+        HtmlBuf::default().node("div", |h| {
+            h.a(Class, "scene-wrap")
+                .node("div", |h| {
+                    h.a(Class, "scene")
+                        .node("section", |h| {
+                            h.a(Class, "table").node("div", |h| {
+                                let h = h.a(Class, "cards");
+                                table_cards.into_iter().fold(h, |h, card| {
+                                    h.node("div", |h| {
+                                        h.a(Class, "card").node("img", |h| {
+                                            h.a(Src, format!("cards/{}.svg", card))
+                                                .a(Alt, format!("{}", card))
+                                        })
+                                    })
+                                })
+                            })
                         })
-                    )
-                    .chain(|h| template_hidden(h, Relative::Left))
-                    .chain(|h| template_hidden(h, Relative::Across))
-                    .chain(|h| template_hidden(h, Relative::Right))
-                )
+                        .chain(|h| template_hidden(h, Relative::Left))
+                        .chain(|h| template_hidden(h, Relative::Across))
+                        .chain(|h| template_hidden(h, Relative::Right))
+                })
                 .chain(|h| template_info(h, Relative::My))
                 .chain(|h| template_info(h, Relative::Left))
                 .chain(|h| template_info(h, Relative::Across))
                 .chain(|h| template_info(h, Relative::Right))
                 .node("div", |h| {
-                    let h = h
-                        .a(Id, "cards-to-play")
-                        .a(Class, "cards player my");
+                    let h = h.a(Id, "cards-to-play").a(Class, "cards player my");
                     let my_cards = matches!(self.phase, Phase::Active | Phase::Post)
                         .then_some(self.game_state.hand(auth.seat))
                         .unwrap_or_default();
-                    my_cards.into_iter().fold(h, |h, card| h
-                        .node("label", |h| h
-                            .a(Class, "card")
-                            .node("input", |h| h
-                                .a(Type, "checkbox")
-                                .a(Name, format!("{}", card))
-                                .a(Value, format!("{}", card))
-                                .a(HxTrigger, "change")
-                                .a(HxPost, "api/playable")
-                                .a(HxInclude, "#cards-to-play")
-                                .a(HxTarget, "#play-button")
-                                .a(HxSwap, "outerHTML")
-                            )
-                            .node("img", |h| h
-                                .a(Src, format!("cards/{}.svg", card))
-                                .a(Alt, format!("{}", card))
-                            )
-                        )
-                    )
+                    my_cards.into_iter().fold(h, |h, card| {
+                        h.node("label", |h| {
+                            h.a(Class, "card")
+                                .node("input", |h| {
+                                    h.a(Type, "checkbox")
+                                        .a(Name, format!("{}", card))
+                                        .a(Value, format!("{}", card))
+                                        .a(HxTrigger, "change")
+                                        .a(HxPost, "api/playable")
+                                        .a(HxInclude, "#cards-to-play")
+                                        .a(HxTarget, "#play-button")
+                                        .a(HxSwap, "outerHTML")
+                                })
+                                .node("img", |h| {
+                                    h.a(Src, format!("cards/{}.svg", card))
+                                        .a(Alt, format!("{}", card))
+                                })
+                        })
+                    })
                 })
-            )
+        })
     }
 
     pub async fn timer(&mut self, _auth: HostAuthenticated, timer: Option<Duration>) -> Result<()> {
@@ -735,7 +719,7 @@ struct PlayerView {
     played: bool,
     winning: bool,
     host_controls: bool,
-    play_button: bool, 
+    play_button: bool,
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]

@@ -1,8 +1,4 @@
-use {
-    std::io::Write as _,
-    std::fmt,
-    axum::{body::Body},
-};
+use {axum::body::Body, std::fmt, std::io::Write as _};
 
 #[derive(Clone, Default, Debug)]
 #[must_use]
@@ -40,8 +36,9 @@ impl HtmlBuf {
     }
 
     #[inline]
-    pub fn chain_if_some<T, F>(self, element: Option<T>, f: F) -> Self 
-    where F: FnOnce(Self, T) -> Self 
+    pub fn chain_if_some<T, F>(self, element: Option<T>, f: F) -> Self
+    where
+        F: FnOnce(Self, T) -> Self,
     {
         match element {
             Some(element) => f(self, element),
@@ -64,7 +61,8 @@ impl HtmlBuf {
     fn raw_attribute<S: AsRef<str>>(mut self, attribute: &str, extension: &str, value: S) -> Self {
         assert!(self.start_tag_unclosed, "no node to add the attribute to");
         write!(self.buf, " {}{}=\"", attribute, extension).unwrap();
-        html_escape::encode_double_quoted_attribute_to_writer(value.as_ref(), &mut self.buf).unwrap();
+        html_escape::encode_double_quoted_attribute_to_writer(value.as_ref(), &mut self.buf)
+            .unwrap();
         write!(self.buf, "\"").unwrap();
         self
     }
@@ -80,7 +78,6 @@ impl HtmlBuf {
     pub fn hx_on<S: AsRef<str>>(self, event: &'static str, value: S) -> Self {
         self.raw_attribute("hx-on:", event, value)
     }
-
 }
 
 macro_rules! make_enum {
@@ -107,9 +104,8 @@ macro_rules! make_enum {
     };
 }
 
-
-    // curl https://raw.githubusercontent.com/jozo/all-html-elements-and-attributes/master/html-elements-attributes.json | jq -r '.[] | .[]' | grep -v data | sort | uniq | awk '{a=$0; gsub("-", "_", a); print a, "\""  $0 "\""}'
-    // https://htmx.org/reference/#attributes
+// curl https://raw.githubusercontent.com/jozo/all-html-elements-and-attributes/master/html-elements-attributes.json | jq -r '.[] | .[]' | grep -v data | sort | uniq | awk '{a=$0; gsub("-", "_", a); print a, "\""  $0 "\""}'
+// https://htmx.org/reference/#attributes
 make_enum! {
     Attribute;
     HxBoost "hx-boost",
@@ -294,7 +290,9 @@ fn is_void(tag: &str) -> bool {
         "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
         "source", "track", "wbr",
     ];
-    assert!(tag.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'z' | b'-')));
+    assert!(tag
+        .bytes()
+        .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'z' | b'-')));
     void_elements.binary_search(&tag).is_ok()
 }
 
@@ -353,10 +351,7 @@ macro_rules! raw_value_header {
             where
                 I: Iterator<Item = &'i HeaderValue>,
             {
-                let value = values
-                    .last()
-                    .ok_or_else(headers::Error::invalid)?
-                    .clone();
+                let value = values.last().ok_or_else(headers::Error::invalid)?.clone();
                 Ok(Self(value))
             }
 
@@ -404,8 +399,8 @@ macro_rules! presence_header {
 }
 
 pub mod request {
+    use headers::Header;
     use http::header::{HeaderName, HeaderValue};
-    use headers::{Header};
     use url::Url;
 
     presence_header!(Boosted "hx-boosted");
@@ -419,10 +414,10 @@ pub mod request {
 }
 
 pub mod response {
+    pub use headers::Header;
     pub use http::header::{HeaderName, HeaderValue};
-    pub use headers::{Header};
     use url::Url;
-    
+
     uri_header!(Location "hx-location");
     uri_header!(PushUrl "hx-push-url");
     uri_header!(Redirect "hx-redirect");
@@ -435,4 +430,3 @@ pub mod response {
     raw_value_header!(TriggerAfterSettle "hx-trigger-after-settle");
     raw_value_header!(TriggerAfterSwap "hx-trigger-after-swap");
 }
-

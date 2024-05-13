@@ -50,7 +50,7 @@ impl GameState {
     }
 
     pub fn playable(&self, cards: Cards) -> Result<Play, PlayError> {
-        if self.winning_player.is_some() { 
+        if self.winning_player.is_some() {
             return Err(PlayError::AlreadyOver);
         }
 

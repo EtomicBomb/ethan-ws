@@ -11,12 +11,13 @@ use {
     },
     http::{request::Parts, status::StatusCode},
     serde::{Deserialize, Serialize},
-    std::{collections::HashMap, convert::Infallible, sync::Arc},
+    std::{collections::HashMap, convert::Infallible, sync::{Arc}},
     tokio::{
         sync::mpsc::{unbounded_channel, UnboundedSender},
         sync::{Mutex, OwnedMutexGuard},
     },
     tokio_stream::{wrappers::UnboundedReceiverStream, Stream, StreamExt},
+    arc_swap::{ArcSwap},
 };
 
 pub fn api<S, I: IntoIterator<Item = T>, T: Into<String>>(tables: I) -> Router<S> {
@@ -34,13 +35,13 @@ pub fn api<S, I: IntoIterator<Item = T>, T: Into<String>>(tables: I) -> Router<S
 
 async fn record_create(
     TableExtract { mut table }: TableExtract,
-    Json(record): Json<Record>,
+    Json(record): Json<Arc<Record>>,
 ) -> impl IntoResponse {
     table.next_record_id.0 += 1;
     let id = RecordId(table.next_record_id.0);
-    let update = Update { id, record: record.clone() };
-    table.notify(Notification::Create(&update)).await;
-    table.records.insert(id, record);
+    let update = Update { id, record: Arc::clone(&record) };
+    table.notify(Notification::Create(update.clone())).await;
+    table.records.insert(id, ArcSwap::new(record));
     Json(update)
 }
 
@@ -51,13 +52,17 @@ async fn record_update(
     }: TableIdExtract,
     Json(record): Json<Record>,
 ) -> Result<impl IntoResponse> {
-    let existing = table
+    let existing_place = table
         .records
-        .get_mut(&record_id)
+        .get(&record_id)
         .ok_or(Error::RecordNotFound)?;
+    let mut existing = (**existing_place.load()).clone();
     existing.fields.extend(record.fields);
-    let update = Update { id: record_id, record: existing.clone() };
-    table.notify(Notification::Update(&update)).await;
+    let existing = Arc::new(existing);
+    existing_place.store(Arc::clone(&existing));
+
+    let update = Update { id: record_id, record: existing };
+    table.notify(Notification::Update(update.clone())).await;
     Ok(Json(update))
 }
 
@@ -67,21 +72,22 @@ async fn record_delete(
         record_id,
     }: TableIdExtract,
 ) -> Result<impl IntoResponse> {
-    let existing = table
+    let record = table
         .records
         .remove(&record_id)
-        .ok_or(Error::RecordNotFound)?;
-    let update = Update { id: record_id, record: existing };
-    table.notify(Notification::Delete(&update)).await;
+        .ok_or(Error::RecordNotFound)?
+        .load()
+        .clone();
+    let update = Update { id: record_id, record };
+    table.notify(Notification::Delete(update.clone())).await;
     Ok(Json(update))
 }
 
 async fn record_read_id(
     TableIdExtract { table, record_id }: TableIdExtract,
 ) -> Result<impl IntoResponse> {
-    let existing = table.records.get(&record_id).ok_or(Error::RecordNotFound)?;
-    let update = Update { id: record_id, record: existing.clone() };
-    Ok(Json(update))
+    let record = table.records.get(&record_id).ok_or(Error::RecordNotFound)?;
+    Ok(Json(Update { id: record_id, record: Arc::clone(&record.load()) }))
 }
 
 async fn record_read_query(
@@ -91,13 +97,14 @@ async fn record_read_query(
     let existing: Vec<_> = table
         .records
         .iter()
+        .map(|(i, r)| (i, r.load()))
         .filter(|(_, r)| {
             record
                 .fields
                 .iter()
                 .all(|(key, value)| r.fields.get(key) == Some(value))
         })
-        .map(|(&id, r)| Update { id, record: r.clone() })
+        .map(|(&id, r)| Update { id, record: Arc::clone(&r) })
         .collect();
     Ok(Json(existing))
 }
@@ -126,13 +133,13 @@ impl Tables {
 
 #[derive(Default)]
 struct Table {
-    records: HashMap<RecordId, Record>,
+    records: HashMap<RecordId, ArcSwap<Record>>,
     next_record_id: RecordId,
     subscribers: Vec<UnboundedSender<String>>,
 }
 
 impl Table {
-    async fn notify<'a>(&mut self, notification: Notification<'_>) {
+    async fn notify(&mut self, notification: Notification) {
         let notification = serde_json::to_string(&notification).unwrap();
         self.subscribers.retain(|stream| stream.send(notification.clone()).is_ok());
     }
@@ -170,16 +177,16 @@ struct RecordId(u64);
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "lowercase")]
 #[serde(tag = "kind", content = "update")]
-enum Notification<'a> {
-    Create(&'a Update),
-    Update(&'a Update),
-    Delete(&'a Update),
+enum Notification {
+    Create(Update),
+    Update(Update),
+    Delete(Update),
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 struct Update {
     id: RecordId,
-    record: Record,
+    record: Arc<Record>,
 }
 
 struct TableExtract {

@@ -52,6 +52,9 @@ name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "async-compression"
@@ -431,6 +434,7 @@ checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 name = "ethan-ws"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "axum",
  "axum-extra",
